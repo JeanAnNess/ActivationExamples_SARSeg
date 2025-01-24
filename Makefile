@@ -2,7 +2,7 @@
 # GLOBALS                                                                       #
 #################################################################################
 
-PROJECT_NAME = ActivationPrototypes-SARSeg
+PROJECT_NAME = ActivationPrototypes_SARSeg
 PYTHON_VERSION = 3.10
 PYTHON_INTERPRETER = python
 
@@ -29,14 +29,14 @@ clean:
 ## Lint using flake8 and black (use `make format` to do formatting)
 .PHONY: lint
 lint:
-	flake8 ActivationPrototypes-SARSeg
-	isort --check --diff --profile black ActivationPrototypes-SARSeg
-	black --check --config pyproject.toml ActivationPrototypes-SARSeg
+	flake8 ActivationPrototypes_SARSeg
+	isort --check --diff --profile black ActivationPrototypes_SARSeg
+	black --check --config pyproject.toml ActivationPrototypes_SARSeg
 
 ## Format source code with black
 .PHONY: format
 format:
-	black --config pyproject.toml ActivationPrototypes-SARSeg
+	black --config pyproject.toml ActivationPrototypes_SARSeg
 
 
 
@@ -60,7 +60,7 @@ create_environment:
 ## Make Dataset
 .PHONY: data
 data: requirements
-	$(PYTHON_INTERPRETER) ActivationPrototypes-SARSeg/dataset.py
+	$(PYTHON_INTERPRETER) ActivationPrototypes_SARSeg/dataset.py
 
 
 #################################################################################
