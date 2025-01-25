@@ -19,7 +19,7 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 import torch.optim as optim
-from torch.amp import autocast
+from torch.amp import GradScaler, autocast
 import segmentation_models_pytorch as smp
 from segmentation_models_pytorch import Unet
 from segmentation_models_pytorch.base import SegmentationHead
@@ -338,7 +338,7 @@ def visual_from_lmdb_with_ref(reference_string, bands, lmdb_path):
 
     plt.show()
 
-def display_random_masks(model, loader, lmdb_path, num_images=10, color_map=color_map, pixel_value_to_class_index=pixel_value_to_class_index):
+def display_results(model, loader, lmdb_path, num_images=10, color_map=color_map, pixel_value_to_class_index=pixel_value_to_class_index, indices = None):
     """
     Displays n random masks from an image set with the ground truth and predicted masks.
 
@@ -357,10 +357,12 @@ def display_random_masks(model, loader, lmdb_path, num_images=10, color_map=colo
     # Create a list of all indices in the test set
     all_indices = list(range(len(loader.dataset)))
     
+    if indices is None:
     # Randomly sample indices
-    random_indices = random.sample(all_indices, num_images)
+        indices = random.sample(all_indices, num_images)
+    print(indices)
     
-    for idx in random_indices:
+    for idx in indices:
         # Get the image and mask at the sampled index
         image, mask = loader.dataset[idx]
         mask = mask.argmax(dim=0).cpu().numpy()
@@ -621,7 +623,7 @@ def training(model, epoch_start, epoch_end, loss_fn, train_loader, val_loader, n
         optimizer, mode="min", factor=0.1, patience=3, verbose=True
     )
     # Mixed precision training setup
-    #scaler = GradScaler()
+    scaler = GradScaler()
 
     for epoch in range(epoch_start, epoch_end+1):
         model.train()
@@ -632,6 +634,7 @@ def training(model, epoch_start, epoch_end, loss_fn, train_loader, val_loader, n
         for images, masks in train_loader_tqdm:
             images, masks = images.to(device), masks.to(device)
 
+            optimizer.zero_grad()
 
             # Mixed precision forward pass
             with autocast(device_type=device_type):
@@ -640,13 +643,12 @@ def training(model, epoch_start, epoch_end, loss_fn, train_loader, val_loader, n
                 loss = loss_fn(outputs, masks)
 
             # Backward pass with gradient scaling
-            # scaler.scale(loss).backward()
-            # scaler.step(optimizer)
-            # scaler.update()
-            optimizer.zero_grad()
-            loss.backward()
-            optimizer.step()
+            scaler.scale(loss).backward()
+            scaler.step(optimizer)
+            scaler.update()
 
+            # loss.backward()
+            # optimizer.step()
 
             # Compute IoU metrics
             tp, fp, fn, tn = smp.metrics.get_stats(
@@ -658,6 +660,10 @@ def training(model, epoch_start, epoch_end, loss_fn, train_loader, val_loader, n
             train_loss += loss.item()
             train_iou += iou.item()
             train_f1 += f1.item()
+
+            # Clear CUDA cache
+            torch.cuda.empty_cache()
+
 
         # Update tqdm progress bar
         epoch_loss_train = train_loss / len(train_loader)
@@ -701,7 +707,10 @@ def training(model, epoch_start, epoch_end, loss_fn, train_loader, val_loader, n
                 val_iou += iou.item()
                 val_f1 += f1.item()
 
-                # Update tqdm progress bar
+                # Clear CUDA cache
+                torch.cuda.empty_cache()
+
+        # Update tqdm progress bar
         epoch_loss_val = val_loss / len(val_loader)
         epoch_iou_val = val_iou / len(val_loader)
         epoch_f1_val = val_f1 / len(val_loader)
