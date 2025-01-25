@@ -2,6 +2,9 @@
 /data/
 !/data/matches
 
+# Tensorboard logs
+runs/
+
 # Mac OS-specific storage files
 .DS_Store
 

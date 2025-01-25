@@ -18,8 +18,11 @@ from matplotlib import pyplot as plt
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
+import torch.optim as optim
+from torch.amp import autocast
 import segmentation_models_pytorch as smp
 from segmentation_models_pytorch import Unet
+from segmentation_models_pytorch.base import SegmentationHead
 from reben_publication.BigEarthNetv2_0_ImageClassifier import BigEarthNetv2_0_ImageClassifier
 from scipy.spatial.distance import cdist
 
@@ -32,6 +35,9 @@ import heapq
 
 # Progress Bar
 from tqdm import tqdm
+
+# Tensorboard
+from torch.utils.tensorboard import SummaryWriter
 
 
 
@@ -501,26 +507,127 @@ def load_base_with_bigearth_pretrained(num_classes= 20):
     return model
 
 '''
+120x120 Model
+'''
+
+class CustomDecoder(nn.Module):
+    def __init__(self, in_channels, decoder_channels):
+        super().__init__()
+
+        # Define upsampling blocks with transposed convolution + ConvBlock
+        def up_block(in_ch, out_ch, scale_factor):
+            return nn.Sequential(
+                nn.Upsample(scale_factor=scale_factor, mode='bilinear', align_corners=True),
+                nn.Conv2d(in_ch, out_ch, kernel_size=3, padding=1),
+                nn.BatchNorm2d(out_ch),
+                nn.ReLU(inplace=True)
+            )
+
+        self.up1 = up_block(in_channels, decoder_channels[0], scale_factor=8/4)     # 4 → 8
+        self.up2 = up_block(decoder_channels[0], decoder_channels[1], scale_factor=15/8)            # 8 → 15
+        self.up3 = up_block(decoder_channels[1], decoder_channels[2], scale_factor=30/15)            # 15 → 30
+        self.up4 = up_block(decoder_channels[2], decoder_channels[3], scale_factor=60/30)             # 30 → 60
+        self.up5 = up_block(decoder_channels[3], decoder_channels[4], scale_factor=120/60)            # 60 → 120
+        
+    def forward(self, x):
+        x = self.up1(x)
+        x = self.up2(x)
+        x = self.up3(x)
+        x = self.up4(x)
+        x = self.up5(x)
+        return x
+
+class CustomUnet(smp.Unet):
+    def __init__(
+        self,
+        encoder_name: str = "resnet50",
+        encoder_weights = None,
+        decoder_channels = (256, 128, 64, 32, 16),
+        in_channels: int = 2,
+        classes: int = 20,
+        activation = "softmax",
+    ):
+        super().__init__(encoder_name=encoder_name, encoder_weights=encoder_weights, in_channels=in_channels, classes=classes, activation=activation)
+        
+        # Modify the decoder to have the desired upsampling stages
+        self.decoder = CustomDecoder(in_channels=self.encoder.out_channels[-1], decoder_channels=decoder_channels)
+        self.segmentation_head = SegmentationHead(
+            in_channels=decoder_channels[-1],
+            out_channels=classes,
+            activation=activation,
+            kernel_size=3,
+        )
+
+    def forward(self, x):
+        features = self.encoder(x)
+        x = features[-1]
+        x = self.decoder(x)
+        x = self.segmentation_head(x)
+        return x
+
+def create_base_model120(backbone='resnet50', weights=None, in_channels=2, num_classes=20):
+    model = CustomUnet(
+        encoder_name=backbone,     # Pretrained encoder, adjust if necessary
+        encoder_weights=weights,   # No ImageNet weights since SAR images are different
+        in_channels=in_channels,   # Two bands (VH, VV)
+        classes=num_classes,       # Number of segmentation classes
+    )
+    return model
+
+def load_from_checkpoint120(checkpoint_path):
+    model = create_base_model120()
+    checkpoint = torch.load(checkpoint_path, weights_only=True)
+    model.load_state_dict(torch.load(checkpoint_path), strict=False)
+    return model
+
+def load_base_with_bigearth_pretrained120():
+    # Load the pretrained model
+    model = create_base_model120()
+    model_bigearth_classifier = BigEarthNetv2_0_ImageClassifier.from_pretrained(
+        "BIFOLD-BigEarthNetv2-0/resnet50-s1-v0.1.1"
+    )
+    pretrained_weights = model_bigearth_classifier.state_dict()
+
+    # Create a mapping from the pretrained model keys to the untrained model keys
+    key_mapping = {
+        pretrained_key: pretrained_key.replace("model.vision_encoder", "encoder")
+        for pretrained_key in pretrained_weights.keys()
+        if pretrained_key.startswith("model.vision_encoder")
+    }
+
+    # Map weights to the untrained model
+    mapped_state_dict = {
+        untrained_key: pretrained_weights[pretrained_key]
+        for pretrained_key, untrained_key in key_mapping.items()
+    }
+    # Load the model
+    missing_keys, unexpected_keys = model.load_state_dict(mapped_state_dict, strict=False)
+    return model
+
+'''
 Training and Inference Utilities
 '''
 
-def training(model, epoch_start, epoch_end, loss_fn):
+def training(model, epoch_start, epoch_end, loss_fn, train_loader, val_loader, num_classes):
     writer = SummaryWriter()
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     device_type = "cuda" if torch.cuda.is_available() else "cpu"
     model.to(device)
     model.train()
     # Iterate over the epochs
-    optimizer = optim.AdamW(model.parameters(), lr=1e-3, weight_decay=1e-4)
-
+    # optimizer = optim.AdamW(model.parameters(), lr=1e-3, weight_decay=1e-4)
+    optimizer = optim.Adam(model.parameters(), lr=1e-3)
+    scheduler = optim.lr_scheduler.ReduceLROnPlateau(
+        optimizer, mode="min", factor=0.1, patience=3, verbose=True
+    )
     # Mixed precision training setup
-    scaler = GradScaler()
+    #scaler = GradScaler()
 
-    for epoch in range(epoch_start, epoch_end):
+    for epoch in range(epoch_start, epoch_end+1):
         model.train()
         train_loss = 0.0
         train_iou = 0.0
-        train_loader_tqdm = tqdm(train_loader, desc=f"Epoch {epoch+1}/{epoch_end}", unit="batch")
+        train_loader_tqdm = tqdm(train_loader, desc=f"Epoch {epoch}/{epoch_end}", unit="batch")
         for images, masks in train_loader_tqdm:
             images, masks = images.to(device), masks.to(device)
 
@@ -533,23 +640,25 @@ def training(model, epoch_start, epoch_end, loss_fn):
                 loss = loss_fn(outputs, masks)
 
             # Backward pass with gradient scaling
-            scaler.scale(loss).backward()
-            scaler.step(optimizer)
-            scaler.update()
+            # scaler.scale(loss).backward()
+            # scaler.step(optimizer)
+            # scaler.update()
+            loss.backward()
+            optimizer.step()
 
             train_loss += loss.item()
 
             # Compute IoU metrics
             tp, fp, fn, tn = smp.metrics.get_stats(
-                outputs.argmax(dim=1).to(torch.int32), masks, mode="multiclass", num_classes=NUM_CLASSES
+                outputs.argmax(dim=1).to(torch.int32), masks, mode="multiclass", num_classes=num_classes
             )
             iou = smp.metrics.iou_score(tp, fp, fn, tn, reduction="micro")
             train_iou += iou.item()
 
             # Update tqdm progress bar
-            train_loader_tqdm.set_postfix(loss=train_loss / len(train_loader), iou=train_iou / len(train_loader))
+        train_loader_tqdm.set_postfix(loss=train_loss / len(train_loader), iou=train_iou / len(train_loader))
 
-        print(f"Epoch {epoch+1}, Loss: {train_loss / len(train_loader):.4f}, IoU: {train_iou / len(train_loader):.4f}")
+        print(f"Epoch {epoch}, Loss: {train_loss / len(train_loader):.4f}, IoU: {train_iou / len(train_loader):.4f}")
         train_loss /= len(train_loader)
         train_iou /= len(train_loader)
 
@@ -575,14 +684,14 @@ def training(model, epoch_start, epoch_end, loss_fn):
                     loss = loss_fn(outputs, masks)
 
                 tp, fp, fn, tn = smp.metrics.get_stats(
-                    outputs.argmax(dim=1).to(torch.int32), masks, mode="multiclass", num_classes=NUM_CLASSES
+                    outputs.argmax(dim=1).to(torch.int32), masks, mode="multiclass", num_classes=num_classes
                 )
                 iou = smp.metrics.iou_score(tp, fp, fn, tn, reduction="micro")
 
                 val_loss += loss.item()
                 val_iou += iou.item()
 
-                val_loader_tqdm.set_postfix(val_loss=val_loss / len(val_loader), val_iou=val_iou / len(val_loader))
+            val_loader_tqdm.set_postfix(val_loss=val_loss / len(val_loader), val_iou=val_iou / len(val_loader))
 
         print(f"Validation Loss: {val_loss / len(val_loader):.4f}, IoU: {val_iou / len(val_loader):.4f}")
         val_loss /= len(val_loader)
@@ -597,7 +706,7 @@ def training(model, epoch_start, epoch_end, loss_fn):
         scheduler.step(val_loss)
 
         # Save model checkpoints (optional)
-        torch.save(model.state_dict(), f"unet_epoch_{epoch+1}.pth")
+        torch.save(model.state_dict(), f"../models/unet120_epoch_{epoch+1}.pth")
 
     writer.flush()
     writer.close()
@@ -732,6 +841,67 @@ class SARSegmentationDataset(Dataset):
         # Convert back to tensors
         image_tensor = torch.tensor(image_tensor_np, dtype=torch.float32)
         mask_indices_one_hot = torch.tensor(mask_indices_one_hot_np, dtype=torch.long)
+
+        return image_tensor, mask_indices_one_hot
+
+class SARSegmentationDataset120(Dataset):
+    def __init__(self, lmdb_path, matches, num_classes=20, transform=None):
+        self.image_lmdb_file = lmdb_path
+        self.env = None
+        self.matches = matches
+        self.num_classes = num_classes
+        self.transform = transform
+        self.open_env()
+
+    def open_env(self):
+        if self.env is None:
+            print("Opening LMDB environment ...")
+            self.env = lmdb.open(
+                str(self.image_lmdb_file),
+                readonly=True,
+                lock=False,
+                meminit=False,
+                readahead=True,
+                map_size=8 * 1024**3,   # 8GB blocked for caching
+                max_spare_txns=16,      # expected number of concurrent transactions (e.g. threads/workers)
+            )
+
+    def __len__(self):
+        return len(self.matches)
+
+    def __getitem__(self, idx):
+        self.open_env()
+        image_key, reference_key = self.matches[idx]
+
+        # Retrieve data from LMDB
+        with self.env.begin() as txn:
+            # Load image data
+            image_data = load(txn.get(image_key.encode()))
+            image_bands = ["VH", "VV"]  # Sentinel 1 bands
+            image_tensor = np.stack([image_data[band] for band in image_bands])
+            
+            # Load reference map
+            mask_data = load(txn.get(reference_key.encode()))
+
+        mask_data = mask_data["Data"]
+        # Replace pixel values with class indices
+        mask_indices = replace_pixel_values_with_class_indices(mask_data, pixel_value_to_class_index)
+
+        # Ensure all class indices are within the valid range
+        mask_indices = np.clip(mask_indices, 1, self.num_classes-1)
+
+        # One-hot encode the class indices
+        mask_indices_one_hot = F.one_hot(torch.tensor(mask_indices).long(), num_classes=self.num_classes).permute(2, 0, 1).float().numpy() # (H, W, C) -> (C, H, W)
+
+        # Apply transformations if provided
+        if self.transform:
+            augmented = self.transform(image=image_tensor, mask=mask_indices_one_hot)
+            image_tensor = augmented['image']
+            mask_indices_one_hot = augmented['mask']
+
+        # Convert back to tensors
+        image_tensor = torch.tensor(image_tensor, dtype=torch.float32)
+        mask_indices_one_hot = torch.tensor(mask_indices_one_hot, dtype=torch.long)
 
         return image_tensor, mask_indices_one_hot
 
