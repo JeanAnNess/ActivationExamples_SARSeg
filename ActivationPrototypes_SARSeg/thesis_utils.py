@@ -608,7 +608,7 @@ def load_base_with_bigearth_pretrained120():
 Training and Inference Utilities
 '''
 
-def training(model, epoch_start, epoch_end, loss_fn, train_loader, val_loader, num_classes):
+def training(model, epoch_start, epoch_end, loss_fn, train_loader, val_loader, num_classes, model_name = "unet120"):
     writer = SummaryWriter()
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     device_type = "cuda" if torch.cuda.is_available() else "cpu"
@@ -627,11 +627,11 @@ def training(model, epoch_start, epoch_end, loss_fn, train_loader, val_loader, n
         model.train()
         train_loss = 0.0
         train_iou = 0.0
+        train_f1 = 0.0
         train_loader_tqdm = tqdm(train_loader, desc=f"Epoch {epoch}/{epoch_end}", unit="batch")
         for images, masks in train_loader_tqdm:
             images, masks = images.to(device), masks.to(device)
 
-            optimizer.zero_grad()
 
             # Mixed precision forward pass
             with autocast(device_type=device_type):
@@ -643,34 +643,42 @@ def training(model, epoch_start, epoch_end, loss_fn, train_loader, val_loader, n
             # scaler.scale(loss).backward()
             # scaler.step(optimizer)
             # scaler.update()
+            optimizer.zero_grad()
             loss.backward()
             optimizer.step()
 
-            train_loss += loss.item()
 
             # Compute IoU metrics
             tp, fp, fn, tn = smp.metrics.get_stats(
                 outputs.argmax(dim=1).to(torch.int32), masks, mode="multiclass", num_classes=num_classes
             )
             iou = smp.metrics.iou_score(tp, fp, fn, tn, reduction="micro")
+            f1 = smp.metrics.f1_score(tp, fp, fn, tn, reduction="micro")
+
+            train_loss += loss.item()
             train_iou += iou.item()
+            train_f1 += f1.item()
 
-            # Update tqdm progress bar
-        train_loader_tqdm.set_postfix(loss=train_loss / len(train_loader), iou=train_iou / len(train_loader))
+        # Update tqdm progress bar
+        epoch_loss_train = train_loss / len(train_loader)
+        epoch_iou_train = train_iou / len(train_loader)
+        epoch_f1_train = train_f1 / len(train_loader)
 
-        print(f"Epoch {epoch}, Loss: {train_loss / len(train_loader):.4f}, IoU: {train_iou / len(train_loader):.4f}")
-        train_loss /= len(train_loader)
-        train_iou /= len(train_loader)
+        train_loader_tqdm.set_postfix(loss=epoch_loss_train, iou=epoch_iou_train, f1=epoch_f1_train)
+
+        print(f"Epoch {epoch}, Loss: {epoch_loss_train:.4f}, IoU: {epoch_iou_train:.4f}, F1: {epoch_f1_train:.4f}")
 
         # Log training metrics
-        writer.add_scalar('Loss/train', train_loss, epoch)
-        writer.add_scalar('IoU/train', train_iou, epoch)
+        writer.add_scalar('Loss/train', epoch_loss_train, epoch)
+        writer.add_scalar('IoU/train', epoch_iou_train, epoch)
+        writer.add_scalar('F1/train', epoch_f1_train, epoch)
 
 
         # Validation loop
         model.eval()
         val_loss = 0.0
         val_iou = 0.0
+        val_f1 = 0.0
         val_loader_tqdm = tqdm(val_loader, desc="Validation", unit="batch")
 
         with torch.no_grad():
@@ -687,26 +695,31 @@ def training(model, epoch_start, epoch_end, loss_fn, train_loader, val_loader, n
                     outputs.argmax(dim=1).to(torch.int32), masks, mode="multiclass", num_classes=num_classes
                 )
                 iou = smp.metrics.iou_score(tp, fp, fn, tn, reduction="micro")
+                f1 = smp.metrics.f1_score(tp, fp, fn, tn, reduction="micro")
 
                 val_loss += loss.item()
                 val_iou += iou.item()
+                val_f1 += f1.item()
 
-            val_loader_tqdm.set_postfix(val_loss=val_loss / len(val_loader), val_iou=val_iou / len(val_loader))
+                # Update tqdm progress bar
+        epoch_loss_val = val_loss / len(val_loader)
+        epoch_iou_val = val_iou / len(val_loader)
+        epoch_f1_val = val_f1 / len(val_loader)
 
-        print(f"Validation Loss: {val_loss / len(val_loader):.4f}, IoU: {val_iou / len(val_loader):.4f}")
-        val_loss /= len(val_loader)
-        val_iou /= len(val_loader)
+        val_loader_tqdm.set_postfix(loss=epoch_loss_val, iou=epoch_iou_val, f1=epoch_f1_val)
 
-        # Log validation metrics
-        writer.add_scalar('Loss/val', val_loss, epoch)
-        writer.add_scalar('IoU/val', val_iou, epoch)
+        print(f"Epoch {epoch}, Loss: {epoch_loss_val:.4f}, IoU: {epoch_iou_val:.4f}, F1: {epoch_f1_val:.4f}")
 
+        # Log val metrics
+        writer.add_scalar('Loss/val', epoch_loss_val, epoch)
+        writer.add_scalar('IoU/val', epoch_iou_val, epoch)
+        writer.add_scalar('F1/val', epoch_f1_val, epoch)
 
         # Step the scheduler
         scheduler.step(val_loss)
 
         # Save model checkpoints (optional)
-        torch.save(model.state_dict(), f"../models/unet120_epoch_{epoch+1}.pth")
+        torch.save(model.state_dict(), f"../models/{model_name}_epoch_{epoch}.pth")
 
     writer.flush()
     writer.close()
