@@ -188,10 +188,11 @@ def match_keys_dynamic(lmdb_path):
     return matches
 
 
+
 def match_keys(parquet_path):
     """
     Matches image keys with their corresponding reference map keys.
-    Note: This function is specific to the BigEarthNet dataset. Please adjust as needed.
+    Note: This function is specific to the BigEarthNet dataset. Please adjust as needed. As per their paper https://arxiv.org/pdf/2407.03653 p.3 they have a 2:1:1 train val test ratio which I will follow.
 
     Args:
         parquet_path (str): Path to the parquet file.
@@ -481,7 +482,7 @@ def create_base_model(backbone ='resnet50', weights = None, in_channel = 2, num_
 def load_from_checkpoint(checkpoint_path, num_classes= 20):
     model = create_base_model(num_classes = num_classes)
     checkpoint = torch.load(checkpoint_path, weights_only=True)
-    model.load_state_dict(torch.load(checkpoint_path), strict=False)
+    model.load_state_dict(torch.load(checkpoint_path, weights_only = True), strict=False)
     return model
 
 def load_base_with_bigearth_pretrained(num_classes= 20):
@@ -579,7 +580,7 @@ def create_base_model120(backbone='resnet50', weights=None, in_channels=2, num_c
 def load_from_checkpoint120(checkpoint_path):
     model = create_base_model120()
     checkpoint = torch.load(checkpoint_path, weights_only=True)
-    model.load_state_dict(torch.load(checkpoint_path), strict=False)
+    model.load_state_dict(torch.load(checkpoint_path, weights_only = True), strict=False)
     return model
 
 def load_base_with_bigearth_pretrained120():
@@ -611,6 +612,7 @@ Training and Inference Utilities
 '''
 
 def training(model, epoch_start, epoch_end, loss_fn, train_loader, val_loader, num_classes, model_name = "unet120"):
+    print(f"Training {model_name} from epoch {epoch_start} to {epoch_end}")
     writer = SummaryWriter()
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     device_type = "cuda" if torch.cuda.is_available() else "cpu"
@@ -619,11 +621,11 @@ def training(model, epoch_start, epoch_end, loss_fn, train_loader, val_loader, n
     # Iterate over the epochs
     # optimizer = optim.AdamW(model.parameters(), lr=1e-3, weight_decay=1e-4)
     optimizer = optim.Adam(model.parameters(), lr=1e-3)
-    scheduler = optim.lr_scheduler.ReduceLROnPlateau(
-        optimizer, mode="min", factor=0.1, patience=3, verbose=True
-    )
+    # scheduler = optim.lr_scheduler.ReduceLROnPlateau(
+    #     optimizer, mode="min", factor=0.1, patience=3, verbose=True
+    # )
     # Mixed precision training setup
-    scaler = GradScaler()
+    # scaler = GradScaler()
 
     for epoch in range(epoch_start, epoch_end+1):
         model.train()
@@ -643,12 +645,12 @@ def training(model, epoch_start, epoch_end, loss_fn, train_loader, val_loader, n
                 loss = loss_fn(outputs, masks)
 
             # Backward pass with gradient scaling
-            scaler.scale(loss).backward()
-            scaler.step(optimizer)
-            scaler.update()
+            # scaler.scale(loss).backward()
+            # scaler.step(optimizer)
+            # scaler.update()
 
-            # loss.backward()
-            # optimizer.step()
+            loss.backward()
+            optimizer.step()
 
             # Compute IoU metrics
             tp, fp, fn, tn = smp.metrics.get_stats(
@@ -662,7 +664,7 @@ def training(model, epoch_start, epoch_end, loss_fn, train_loader, val_loader, n
             train_f1 += f1.item()
 
             # Clear CUDA cache
-            torch.cuda.empty_cache()
+            # torch.cuda.empty_cache()
 
 
         # Update tqdm progress bar
@@ -708,7 +710,7 @@ def training(model, epoch_start, epoch_end, loss_fn, train_loader, val_loader, n
                 val_f1 += f1.item()
 
                 # Clear CUDA cache
-                torch.cuda.empty_cache()
+                # torch.cuda.empty_cache()
 
         # Update tqdm progress bar
         epoch_loss_val = val_loss / len(val_loader)
@@ -725,7 +727,7 @@ def training(model, epoch_start, epoch_end, loss_fn, train_loader, val_loader, n
         writer.add_scalar('F1/val', epoch_f1_val, epoch)
 
         # Step the scheduler
-        scheduler.step(val_loss)
+        # scheduler.step(val_loss)
 
         # Save model checkpoints (optional)
         torch.save(model.state_dict(), f"../models/{model_name}_epoch_{epoch}.pth")
@@ -737,6 +739,7 @@ def calculate_scores(model, test_loader, device, num_classes):
     model.eval()
     test_loss = 0.0
     test_iou = 0.0
+    test_f1 = 0.0
     criterion = nn.CrossEntropyLoss()  # Adjust based on your task
 
     with torch.no_grad():
@@ -748,19 +751,22 @@ def calculate_scores(model, test_loader, device, num_classes):
             masks = masks.argmax(dim=1)
             
             loss = criterion(outputs, masks)
-            tp, fp, fn, tn = smp.metrics.get_stats(outputs.argmax(dim=1).to(torch.int32), masks, mode='multiclass', num_classes=num_classes)
+            tp, fp, fn, tn = smp.metrics.get_stats(
+                    outputs.argmax(dim=1).to(torch.int32), masks, mode="multiclass", num_classes=num_classes
+                )
+            iou = smp.metrics.iou_score(tp, fp, fn, tn, reduction="micro")
+            f1 = smp.metrics.f1_score(tp, fp, fn, tn, reduction="micro")
 
-            # Compute IoU
-            iou = smp.metrics.iou_score(tp, fp, fn, tn, reduction='micro')
-            
             test_loss += loss.item()
             test_iou += iou.item()
+            test_f1 += f1.item()
 
     test_loss /= len(test_loader)
     test_iou /= len(test_loader)
+    test_f1 /= len(test_loader)
 
-    print(f"Test Loss: {test_loss}, Test IoU: {test_iou}")
-    return test_loss, test_iou
+    print(f"Test Loss: {test_loss}, Test IoU: {test_iou}, Test F1: {test_f1}")
+    return test_loss, test_iou, test_f1
 
 def inference(img, model):
     """
