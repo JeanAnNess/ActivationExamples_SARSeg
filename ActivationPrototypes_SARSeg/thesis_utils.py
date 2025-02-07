@@ -522,7 +522,7 @@ class CustomDecoder(nn.Module):
             return nn.Sequential(
                 nn.Upsample(scale_factor=scale_factor, mode='bilinear', align_corners=True),
                 nn.Conv2d(in_ch, out_ch, kernel_size=3, padding=1),
-                nn.BatchNorm2d(out_ch),
+                nn.BatchNorm2d(out_ch), # FIXME: Anschauen, ob das ohne besser geht
                 nn.ReLU(inplace=True)
             )
 
@@ -611,46 +611,50 @@ def load_base_with_bigearth_pretrained120():
 Training and Inference Utilities
 '''
 
-def training(model, epoch_start, epoch_end, loss_fn, train_loader, val_loader, num_classes, model_name = "unet120"):
-    print(f"Training {model_name} from epoch {epoch_start} to {epoch_end}")
+def training(model, epoch_start, epoch_end, loss_fn, train_loader, val_loader, num_classes, 
+             lr=1e-4, model_name="unet120", freeze_epochs=2):
+    
+    print(f"Training started for {model_name} from epoch {epoch_start} to {epoch_end}")
     writer = SummaryWriter()
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     device_type = "cuda" if torch.cuda.is_available() else "cpu"
     model.to(device)
-    model.train()
-    # Iterate over the epochs
-    # optimizer = optim.AdamW(model.parameters(), lr=1e-3, weight_decay=1e-4)
-    optimizer = optim.Adam(model.parameters(), lr=1e-3)
-    # scheduler = optim.lr_scheduler.ReduceLROnPlateau(
-    #     optimizer, mode="min", factor=0.1, patience=3, verbose=True
-    # )
-    # Mixed precision training setup
-    # scaler = GradScaler()
 
-    for epoch in range(epoch_start, epoch_end+1):
+    # Optimizer & Scheduler
+    optimizer = optim.AdamW(model.parameters(), lr=lr, weight_decay=1e-4)
+    scheduler = optim.lr_scheduler.ReduceLROnPlateau(optimizer, mode="min", factor=0.5, patience=2, verbose=True)
+
+    scaler = GradScaler()  # Mixed precision
+    best_val_loss = float('inf')
+    patience = 5  # Early stopping patience
+    patience_counter = 0
+
+    for epoch in range(epoch_start, epoch_end + 1):
+        # Unfreeze encoder layers after 'freeze_epochs'
+        if epoch == freeze_epochs+1:
+            for param in model.encoder.parameters():
+                param.requires_grad = True
+            print(f"Unfroze encoder layers at start of epoch {epoch}")
+
+        # Training Phase
         model.train()
-        train_loss = 0.0
-        train_iou = 0.0
-        train_f1 = 0.0
+        train_loss, train_iou, train_f1 = 0.0, 0.0, 0.0
         train_loader_tqdm = tqdm(train_loader, desc=f"Epoch {epoch}/{epoch_end}", unit="batch")
+        num_batches = 0
+
         for images, masks in train_loader_tqdm:
             images, masks = images.to(device), masks.to(device)
 
             optimizer.zero_grad()
-
-            # Mixed precision forward pass
             with autocast(device_type=device_type):
                 outputs = model(images)
                 masks = masks.argmax(dim=1)  # Convert one-hot to class indices
                 loss = loss_fn(outputs, masks)
 
-            # Backward pass with gradient scaling
-            # scaler.scale(loss).backward()
-            # scaler.step(optimizer)
-            # scaler.update()
-
-            loss.backward()
-            optimizer.step()
+            scaler.scale(loss).backward()
+            torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=1.0)  # Gradient clipping
+            scaler.step(optimizer)
+            scaler.update()
 
             # Compute IoU metrics
             tp, fp, fn, tn = smp.metrics.get_stats(
@@ -662,41 +666,35 @@ def training(model, epoch_start, epoch_end, loss_fn, train_loader, val_loader, n
             train_loss += loss.item()
             train_iou += iou.item()
             train_f1 += f1.item()
+            
+            num_batches += 1
+            avg_loss = train_loss / num_batches
+            avg_iou = train_iou / num_batches
+            avg_f1 = train_f1 / num_batches
+            
+            train_loader_tqdm.set_postfix(loss=avg_loss, iou=avg_iou, f1=avg_f1)
 
-            # Clear CUDA cache
-            # torch.cuda.empty_cache()
-
-
-        # Update tqdm progress bar
+        # Log Training Metrics
         epoch_loss_train = train_loss / len(train_loader)
         epoch_iou_train = train_iou / len(train_loader)
         epoch_f1_train = train_f1 / len(train_loader)
-
-        train_loader_tqdm.set_postfix(loss=epoch_loss_train, iou=epoch_iou_train, f1=epoch_f1_train)
-
-        print(f"Epoch {epoch}, Loss: {epoch_loss_train:.4f}, IoU: {epoch_iou_train:.4f}, F1: {epoch_f1_train:.4f}")
-
-        # Log training metrics
         writer.add_scalar('Loss/train', epoch_loss_train, epoch)
         writer.add_scalar('IoU/train', epoch_iou_train, epoch)
         writer.add_scalar('F1/train', epoch_f1_train, epoch)
+        print(f"Epoch {epoch}, Train Loss: {epoch_loss_train:.4f}, IoU: {epoch_iou_train:.4f}, F1: {epoch_f1_train:.4f}")
 
-
-        # Validation loop
+        # Validation Phase
         model.eval()
-        val_loss = 0.0
-        val_iou = 0.0
-        val_f1 = 0.0
+        val_loss, val_iou, val_f1 = 0.0, 0.0, 0.0
         val_loader_tqdm = tqdm(val_loader, desc="Validation", unit="batch")
+        num_batches = 0
 
         with torch.no_grad():
             for images, masks in val_loader_tqdm:
                 images, masks = images.to(device), masks.to(device)
-
-                # Mixed precision forward pass
                 with autocast(device_type=device_type):
                     outputs = model(images)
-                    masks = masks.argmax(dim=1)  # Convert one-hot to class indices
+                    masks = masks.argmax(dim=1)
                     loss = loss_fn(outputs, masks)
 
                 tp, fp, fn, tn = smp.metrics.get_stats(
@@ -709,31 +707,46 @@ def training(model, epoch_start, epoch_end, loss_fn, train_loader, val_loader, n
                 val_iou += iou.item()
                 val_f1 += f1.item()
 
-                # Clear CUDA cache
-                # torch.cuda.empty_cache()
+                num_batches += 1
+                avg_loss = val_loss / num_batches
+                avg_iou = val_iou / num_batches
+                avg_f1 = val_f1 / num_batches
 
-        # Update tqdm progress bar
+                val_loader_tqdm.set_postfix(loss=avg_loss, iou=avg_iou, f1=avg_f1)
+
+        # Log Validation Metrics
         epoch_loss_val = val_loss / len(val_loader)
         epoch_iou_val = val_iou / len(val_loader)
         epoch_f1_val = val_f1 / len(val_loader)
-
-        val_loader_tqdm.set_postfix(loss=epoch_loss_val, iou=epoch_iou_val, f1=epoch_f1_val)
-
-        print(f"Epoch {epoch}, Loss: {epoch_loss_val:.4f}, IoU: {epoch_iou_val:.4f}, F1: {epoch_f1_val:.4f}")
-
-        # Log val metrics
         writer.add_scalar('Loss/val', epoch_loss_val, epoch)
         writer.add_scalar('IoU/val', epoch_iou_val, epoch)
         writer.add_scalar('F1/val', epoch_f1_val, epoch)
+        print(f"Epoch {epoch}, Val Loss: {epoch_loss_val:.4f}, IoU: {epoch_iou_val:.4f}, F1: {epoch_f1_val:.4f}")
 
-        # Step the scheduler
-        # scheduler.step(val_loss)
+        # Reduce LR on plateau
+        scheduler.step(epoch_loss_val)
 
-        # Save model checkpoints (optional)
         torch.save(model.state_dict(), f"../models/{model_name}_epoch_{epoch}.pth")
+
+        # Early Stopping Check
+        if epoch_loss_val < best_val_loss:
+            best_val_loss = epoch_loss_val
+            patience_counter = 0
+            torch.save(model.state_dict(), f"../models/{model_name}_best.pth")  # Save best model
+        else:
+            patience_counter += 1
+
+        if patience_counter >= patience:
+            print("Early stopping triggered!")
+            break
+
+    # Print the last used learning rate
+    last_lr = optimizer.param_groups[0]['lr']
+    print(f"Last used learning rate: {last_lr}")
 
     writer.flush()
     writer.close()
+
 
 def calculate_scores(model, test_loader, device, num_classes):
     model.eval()
