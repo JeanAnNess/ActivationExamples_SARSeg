@@ -23,6 +23,7 @@ from torch.amp import GradScaler, autocast
 import segmentation_models_pytorch as smp
 from segmentation_models_pytorch import Unet
 from segmentation_models_pytorch.base import SegmentationHead
+from segmentation_models_pytorch.losses import DiceLoss, SoftBCEWithLogitsLoss, JaccardLoss, FocalLoss
 from reben_publication.BigEarthNetv2_0_ImageClassifier import BigEarthNetv2_0_ImageClassifier
 from scipy.spatial.distance import cdist
 
@@ -835,7 +836,7 @@ def calculate_scores(model, test_loader, device, num_classes):
     test_loss = 0.0
     test_iou = 0.0
     test_f1 = 0.0
-    criterion_base = FocalLoss(mode='multiclass', ignore_index=20)  
+    criterion = FocalLoss(mode='multiclass', ignore_index=20)  
 
     with torch.no_grad():
         for images, masks in tqdm(test_loader, desc="Calculating scores"):
