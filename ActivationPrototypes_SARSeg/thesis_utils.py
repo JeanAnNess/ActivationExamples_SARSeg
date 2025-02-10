@@ -1113,6 +1113,52 @@ def load_activation(image_reference, layer_name, env):
             print(f"Activation for {image_reference} and {layer_name} not found.")
             return None
 
+def load_activation120(image_reference, layer_name, env):
+    """
+    Find and load the activation for a specific image and layer.
+
+    Args:
+        image_reference (str): The image reference.
+        layer_name (str): The layer name.
+
+    Returns:
+        torch.Tensor: The loaded activation tensor.
+
+    """
+    with env.begin() as txn:
+        # Construct the key to retrieve the activation (same key format used when saving)
+        key = f"{image_reference}_{layer_name}".encode()
+        
+        # Retrieve the activation from the LMDB database
+        activation_data = txn.get(key)
+        
+        if activation_data is not None:
+            # Convert the byte data back to a numpy array
+            activation_array = np.frombuffer(activation_data, dtype=np.float32)
+            
+            # Determine the correct shape based on the layer name
+            if layer_name == 'encoder.layer1':
+                activation_shape = (1, 256, 30, 30)
+            elif layer_name == 'encoder.layer2':
+                activation_shape = (1, 512, 15, 15)
+            elif layer_name == 'encoder.layer3':
+                activation_shape = (1, 1024, 8, 8)
+            elif layer_name == 'encoder.layer4':
+                activation_shape = (1, 2048, 4, 4)
+            else:
+                raise ValueError(f"Unknown layer name: {layer_name}")
+            
+            # Reshape the array to match the original activation shape
+            activation_array = activation_array.reshape(activation_shape)
+            
+            # Convert it to a PyTorch tensor if needed
+            activation_tensor = torch.tensor(activation_array)
+            
+            return activation_tensor
+        else:
+            print(f"Activation for {image_reference} and {layer_name} not found.")
+            return None
+
 def extract_region_activations(activation, region_coords, layer_name):
     if layer_name == 'encoder.layer1':
         factor = 4
