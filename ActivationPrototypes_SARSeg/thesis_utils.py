@@ -338,6 +338,84 @@ def visual_from_lmdb_with_ref(reference_string, bands, lmdb_path):
         axes[i].axis('off')
 
     plt.show()
+import random
+import lmdb
+import torch
+import matplotlib.pyplot as plt
+
+def display_results2(models, loader, lmdb_path, num_images=10, color_map=color_map, pixel_value_to_class_index=pixel_value_to_class_index, indices=None):
+    """
+    Displays n random masks from an image set with the ground truth and predicted masks from multiple models.
+
+    Args:
+        models (List[torch.nn.Module]): The list of models to use for inference.
+        loader (torch.utils.data.DataLoader): The data loader for the image set.
+        lmdb_path (str): Path to the LMDB database.
+        num_images (int): The number of images to display.
+        color_map (Dict[int, List[int]]): A dictionary mapping class indices to RGB colors.
+        pixel_value_to_class_index (Dict[int, int]): A dictionary mapping pixel values to class indices.
+        indices (List[int], optional): Specific indices to display. If None, random indices will be selected.
+    """
+    for model in models:
+        model.eval()
+    
+    env = lmdb.open(lmdb_path, readonly=True, lock=False)
+    
+    # Create a list of all indices in the test set
+    all_indices = list(range(len(loader.dataset)))
+    
+    if indices is None:
+        # Randomly sample indices
+        indices = random.sample(all_indices, num_images)
+    print(indices)
+    
+    for idx in indices:
+        # Get the image and mask at the sampled index
+        image, mask = loader.dataset[idx]
+        mask = mask.argmax(dim=0).cpu().numpy()
+
+        # Get the corresponding real mask from the LMDB database
+        image_key, reference_key = loader.dataset.matches[idx]
+        with env.begin() as txn:
+            real_mask_data = load(txn.get(reference_key.encode()))
+        real_mask = real_mask_data["Data"]
+
+        print(f"Image Key: {image_key}, Reference Key: {reference_key}")
+
+        # Predict the mask for each model
+        preds = [inference(image.unsqueeze(0).to(device), model) for model in models]
+        
+        real_mask_indices = replace_pixel_values_with_class_indices(real_mask, pixel_value_to_class_index)
+
+        real_mask_colored = apply_color_map(real_mask_indices, color_map)
+        pred_masks_colored = [apply_color_map(pred.squeeze(0).cpu(), color_map) for pred in preds]
+
+        # Create a figure with subplots for each model's prediction
+        fig, axes = plt.subplots(1, 3 + len(models), figsize=(5 * (3 + len(models)), 5))
+
+        # Display the VH channel
+        axes[0].imshow(image[0].cpu().numpy(), cmap='gray')
+        axes[0].set_title('VH Channel Visualization')
+        axes[0].axis('off')
+
+        # Display the VV channel
+        axes[1].imshow(image[1].cpu().numpy(), cmap='gray')
+        axes[1].set_title('VV Channel Visualization')
+        axes[1].axis('off')
+
+        # Display the ground truth mask
+        axes[2].imshow(real_mask_colored)
+        axes[2].set_title('Ground Truth Mask')
+        axes[2].axis('off')
+
+        # Display the predicted masks for each model
+        for i, pred_mask_colored in enumerate(pred_masks_colored):
+            axes[3 + i].imshow(pred_mask_colored)
+            axes[3 + i].set_title(f'Predicted Mask (Model {i+1})')
+            axes[3 + i].axis('off')
+
+        plt.show()
+
 
 def display_results(model, loader, lmdb_path, num_images=10, color_map=color_map, pixel_value_to_class_index=pixel_value_to_class_index, indices = None):
     """
@@ -409,7 +487,7 @@ def display_results(model, loader, lmdb_path, num_images=10, color_map=color_map
 
         plt.show()
 
-def display_good_bad(model, lmdb_path, ref_image, ref_reference, color_map = color_map, pixel_value_to_class_index = pixel_value_to_class_index):
+def display_good_bad(model, lmdb_path, ref_image, ref_reference, color_map = color_map, pixel_value_to_class_index = pixel_value_to_class_index, img_size = 128):
     """
     Displays a visualization of (handpicked) good and bad predictions of the model.
 
@@ -433,7 +511,11 @@ def display_good_bad(model, lmdb_path, ref_image, ref_reference, color_map = col
         
         # Convert image to PyTorch tensor and unsqueeze
         image_tensor = torch.tensor(image, dtype=torch.float32).unsqueeze(0).to(device)
-        padded_img_tensor = pad_image(image_tensor, 128, 128)
+
+        if img_size == 128:
+            padded_img_tensor = pad_image(image_tensor, 128, 128)
+        else:
+            padded_img_tensor = pad_image(image_tensor, 120, 120)
         
         # Load reference map
         real_mask_data = load(txn.get(ref_reference.encode()))
@@ -753,7 +835,7 @@ def calculate_scores(model, test_loader, device, num_classes):
     test_loss = 0.0
     test_iou = 0.0
     test_f1 = 0.0
-    criterion = nn.CrossEntropyLoss()  # Adjust based on your task
+    criterion_base = FocalLoss(mode='multiclass', ignore_index=20)  
 
     with torch.no_grad():
         for images, masks in tqdm(test_loader, desc="Calculating scores"):
@@ -1043,10 +1125,10 @@ def extract_region_activations(activation, region_coords, layer_name):
         raise ValueError(f"Unknown layer name: {layer_name}")
     
     x1, y1, x2, y2 = region_coords
-    new_x1 = x1 // factor
-    new_y1 = y1 // factor
-    new_x2 = x2 // factor
-    new_y2 = y2 // factor
+    new_x1 = int(x1 // factor)
+    new_y1 = int(y1 // factor)
+    new_x2 = int(x2 // factor)
+    new_y2 = int(y2 // factor)
 
     # print(f"New Region Coords: ({new_x1}, {new_y1}, {new_x2}, {new_y2})")
     region_activation = activation[:, :, new_y1:new_y2, new_x1:new_x2]
@@ -1106,45 +1188,80 @@ def plot_similarities(query_image, query_predicted, similar_images, similar_mask
     plt.tight_layout()
     plt.show()
 
-def find_n_similar_images(query_activation, layer_name, train_image_keys, activation_lmdb_path, n=10, region_coords=None, metric = 'cosine'):
+def find_n_similar_regions(query_activation, layer_name, train_image_keys, activation_lmdb_path, 
+                           n=10, region_coords=None, metric='cosine'):
+    """
+    Find the top-N most similar regions in training images compared to a fixed region in the query image.
+    
+    - Uses a sliding window to extract candidate regions from training images.
+    - Computes similarity between query region and each candidate region.
+    - Maintains a heap of the top-N most similar regions.
+    
+    Args:
+        query_activation (np.ndarray): Feature activation for the query image.
+        layer_name (str): The model layer to extract activations from.
+        train_image_keys (List[str]): List of training image keys.
+        activation_lmdb_path (str): Path to the LMDB database storing activations.
+        n (int): Number of most similar regions to return.
+        region_coords (Tuple[int, int, int, int]): (x1, y1, x2, y2) coordinates of the query region.
+        metric (str): Similarity metric (e.g., 'cosine', 'euclidean').
+
+    Returns:
+        List[Tuple[float, str, Tuple[int, int, int, int]]]: 
+            Sorted list of (similarity_score, image_key, region_coords).
+    """
     min_heap = []
     temp_query_activation = query_activation
     env = lmdb.open(activation_lmdb_path, readonly=True, lock=False)
+
+    original_h, original_w = query_activation.shape[-2:]
+
+    # Extract query activation for the specified region
+    if region_coords:
+        temp_query_activation = extract_region_activations(temp_query_activation, region_coords, layer_name)
+
+    win_w, win_h = temp_query_activation.shape[-2:]
+    stride = max(win_w, win_h)
+
     with env.begin() as txn:
         for train_image_key in train_image_keys:
-            train_activation = load_activation(train_image_key, layer_name, env = env)
+            train_activation = load_activation(train_image_key, layer_name, env=env)
+            count_comparisions = 0
+            if train_activation is None:
+                continue
 
-            if train_activation is not None:
-                if region_coords is not None:
-                    # print("Changing scope of comparison from full image to region. Size before: ", train_activation.shape)
-                    train_activation = extract_region_activations(train_activation, region_coords, layer_name)
-                    temp_query_activation = extract_region_activations(query_activation, region_coords, layer_name)
-                    # print("Train Activation Shape: ", train_activation.shape)
-                    # print("Query Activation Shape: ", temp_query_activation.shape)
+            _, _, H, W = train_activation.shape  # Activation map dimensions
 
-                similarity = compute_similarity(temp_query_activation, train_activation, metric=metric)
-                
-                if len(min_heap) < n:
-                    heapq.heappush(min_heap, (similarity, train_image_key))
-                else:
-                    heapq.heappushpop(min_heap, (similarity, train_image_key))
+            # print(f"H: {H}, W: {W}, Win W: {win_w}, Win H: {win_h}, Stride: {stride}")
+            best_match = None  # Store the best matching region in the current image
 
-    top_n_results = sorted(min_heap, key=lambda x: x[0], reverse=True)
+            # Slide a window over the activation map
+            for y in range(0, H - win_h + 1, stride):
+                for x in range(0, W - win_w + 1, stride):
+                    candidate_activation = train_activation[:, :, y:y+win_h, x:x+win_w]
+
+                    similarity = compute_similarity(temp_query_activation, candidate_activation, metric=metric)
+                    count_comparisions += 1
+                    # Store top-N matches
+                    heapq.heappush(min_heap, (similarity, train_image_key, (x, y, x+win_w, y+win_h)))
+
+                    if len(min_heap) > n:
+                        heapq.heappop(min_heap)  # Keep only top-N
+            # print(f"Compared {count_comparisions} regions in {train_image_key}")
+
     env.close()
-    return top_n_results
+    return sorted(min_heap, key=lambda x: x[0], reverse=True)  # Sort by highest similarity
 
-def display_n_similar_images(query_image, activations_dict, layer_name, image_keys, activations_lmdb_path, images_lmdb_path, model, img_hw = (128,128), color_map = color_map, region_coords=None):
+
+def display_n_similar_images(query_image, activations_dict, layer_name, image_keys, 
+                             activations_lmdb_path, images_lmdb_path, model, 
+                             img_hw=(120,120), color_map=color_map, region_coords=None):
     """
-    Display the query image and the top N similar images with their predicted masks.
+    Displays the query image alongside the most similar image regions.
 
-    Args:
-        query_image (torch.Tensor): The query image tensor in (C, H, W) format.
-        top_n_results (List[Tuple[float, str]]): A list of (similarity_score, image_key) pairs.
-        lmdb_path (str): Path to the LMDB database.
-        model (torch.nn.Module): The model used for inference.
-        img_hw (Tuple[int, int]): The target image height and width.
-        color_map (Dict[int, List[int]]): A dictionary mapping class indices to RGB colors.
-
+    - Extracts the query region.
+    - Finds top matching regions using sliding window search.
+    - Displays retrieved regions from training images.
     """
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
@@ -1162,13 +1279,12 @@ def display_n_similar_images(query_image, activations_dict, layer_name, image_ke
     query_activations = activations_dict[layer_name]
 
     # Find similar images based on activations
-    similar_images = []
-    similar_masks = []
-    titles = []
-    top_n_results = find_n_similar_images(query_activations, layer_name, image_keys, activations_lmdb_path, n=5, region_coords=region_coords)
+    top_n_results = find_n_similar_regions(query_activations, layer_name, image_keys, activations_lmdb_path, n=5, region_coords=region_coords)
     print("Top N Results: ", top_n_results)
+
+    similar_images, similar_masks, titles = [], [], []
     
-    for similarity_score, image_key in top_n_results:
+    for similarity_score, image_key, region_coords in top_n_results:
         # Load the images
         image, _ = get_image_and_mask_from_key(image_key, lmdb_path=images_lmdb_path)
         image = torch.tensor(image, dtype=torch.float32).to(device)
@@ -1180,15 +1296,16 @@ def display_n_similar_images(query_image, activations_dict, layer_name, image_ke
         # Append results
         similar_images.append(image.squeeze(0)) # Remove batch dimension
         similar_masks.append(pred_mask)
-        titles.append(f"{image_key}\nSim: {similarity_score:.3f}")
+        titles.append(f"{image_key}\nSim: {similarity_score:.3f}\nRegion: {region_coords}")
 
     plot_similarities(
-        query_image=query_image.squeeze(0),  # Query image (C, H, W)
-        query_predicted=out_mask_colored,    # Query mask (H, W)
-        similar_images=similar_images,      # Top-5 images
-        similar_masks=similar_masks,        # Top-5 masks
-        titles=titles                        # Titles with similarity scores
+        query_image=query_image.squeeze(0), 
+        query_predicted=out_mask_colored, 
+        similar_images=similar_images, 
+        similar_masks=similar_masks, 
+        titles=titles
     )
+
 
 
 ''' 
