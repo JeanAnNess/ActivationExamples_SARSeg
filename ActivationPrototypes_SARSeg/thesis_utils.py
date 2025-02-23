@@ -13,6 +13,7 @@ import re
 # Plotting
 import matplotlib.pyplot as plt
 from matplotlib import pyplot as plt
+import matplotlib.patches as patches
 
 # Machine Learning
 import torch
@@ -1032,36 +1033,6 @@ class SARSegmentationDataset120(Dataset):
 '''
 Experiment Utilities
 '''
-def get_encoder_sequential_layer_output_shapes(model, input_tensor):
-    """
-    Get the output shapes of the encoder's sequential layers.
-
-    Args:
-        model (torch.nn.Module): The model.
-        input_tensor (torch.Tensor): The input tensor.
-
-    Returns:
-        Dict[torch.nn.Module, torch.Size]: A dictionary mapping the layer to its output shape.
-    """
-    layer_shapes = {}
-
-    def hook(module, input, output):
-        layer_shapes[module] = output.shape
-
-    hooks = []
-    for name, layer in model.encoder.named_children():
-        if isinstance(layer, nn.Sequential):
-            hooks.append(layer.register_forward_hook(hook))
-
-    model(input_tensor)
-
-    for hook in hooks:
-        hook.remove()
-
-    for i, (layer, shape) in enumerate(layer_shapes.items()):
-        print(f"Layer {i + 1}: {shape}")
-
-    return layer_shapes
 
 '''
 Activation LMDB Utilities
@@ -1092,9 +1063,9 @@ def load_activation(image_reference, layer_name, env):
             
             # Determine the correct shape based on the layer name
             if layer_name == 'encoder.layer1':
-                activation_shape = (1, 256, 32, 32)
+                activation_shape = (1, 256, 30, 30)
             elif layer_name == 'encoder.layer2':
-                activation_shape = (1, 512, 16, 16)
+                activation_shape = (1, 512, 15, 15)
             elif layer_name == 'encoder.layer3':
                 activation_shape = (1, 1024, 8, 8)
             elif layer_name == 'encoder.layer4':
@@ -1145,6 +1116,16 @@ def load_activation120(image_reference, layer_name, env):
                 activation_shape = (1, 1024, 8, 8)
             elif layer_name == 'encoder.layer4':
                 activation_shape = (1, 2048, 4, 4)
+            elif layer_name == 'decoder.up1':
+                activation_shape = (1, 256, 8, 8)
+            elif layer_name == 'decoder.up2':
+                activation_shape = (1, 128, 15, 15)
+            elif layer_name == 'decoder.up3':
+                activation_shape = (1, 64, 30, 30)
+            elif layer_name == 'decoder.up4':
+                activation_shape = (1, 32, 60, 60)
+            elif layer_name == 'decoder.up5':
+                activation_shape = (1, 16, 120, 120)
             else:
                 raise ValueError(f"Unknown layer name: {layer_name}")
             
@@ -1165,9 +1146,19 @@ def extract_region_activations(activation, region_coords, layer_name):
     elif layer_name == 'encoder.layer2':
         factor = 8
     elif layer_name == 'encoder.layer3':
-        factor = 16
+        factor = 15
     elif layer_name == 'encoder.layer4':
-        factor = 32
+        factor = 30
+    elif layer_name == 'decoder.up1':
+        factor = 15
+    elif layer_name == 'decoder.up2':
+        factor = 8
+    elif layer_name == 'decoder.up3':
+        factor = 4
+    elif layer_name == 'decoder.up4':
+        factor = 2
+    elif layer_name == 'decoder.up5':
+        factor = 1
     else:
         raise ValueError(f"Unknown layer name: {layer_name}")
     
@@ -1189,7 +1180,7 @@ def get_activation(name, dictionary):
 
 def setup_hooks(model, activations_dict):
     for name, layer in model.named_modules():
-        if isinstance(layer, torch.nn.Sequential) and name.startswith("encoder") and "downsample" not in name:
+        if isinstance(layer, torch.nn.Sequential) and (name.startswith("encoder") or name.startswith("decoder")) and "downsample" not in name:
             layer.register_forward_hook(get_activation(name, activations_dict))
 
 '''
@@ -1201,7 +1192,7 @@ def compute_similarity(query_activations, train_activations, metric='cosine'):
     train_flat = train_activations.flatten().cpu().numpy()
     return 1 - cdist([query_flat], [train_flat], metric=metric)[0][0]
 
-def plot_similarities(query_image, query_predicted, similar_images, similar_masks, titles):
+def plot_similarities(query_image, query_predicted, similar_images, similar_masks, titles, draw_boxes):
     """
     Displays the query image, predicted mask, and similar images with their masks.
 
@@ -1223,14 +1214,29 @@ def plot_similarities(query_image, query_predicted, similar_images, similar_mask
     axes[1, 0].set_title("Predicted Mask")
     axes[1, 0].axis("off")
 
+    # Draw box in query image
+    x1,y1,x2,y2 = draw_boxes.pop(0)
+    rect1 = patches.Rectangle((x1, y1), x2 - x1, y2 - y1, linewidth=1, edgecolor='c', facecolor='none')
+    rect2 = patches.Rectangle((x1, y1), x2 - x1, y2 - y1, linewidth=1, edgecolor='c', facecolor='none')
+    axes[0, 0].add_patch(rect1)
+    axes[1, 0].add_patch(rect2)
+
     # Display Top-5 Similar Images and Masks
-    for i, (img, mask, title) in enumerate(zip(similar_images, similar_masks, titles), start=1):
+    for i, (img, mask, title, draw_box) in enumerate(zip(similar_images, similar_masks, titles, draw_boxes), start=1):
         axes[0, i].imshow(img[0].cpu().numpy(), cmap='gray')
         axes[0, i].set_title(f"Image {i}: {title}")
         axes[0, i].axis("off")
         axes[1, i].imshow(mask)  # Mask (HW)
         axes[1, i].set_title(f"Mask {i}")
         axes[1, i].axis("off")
+
+        # Draw the box if available
+        if draw_box:
+            x1, y1, x2, y2 = draw_box
+            rect1 = patches.Rectangle((x1, y1), x2 - x1, y2 - y1, linewidth=1, edgecolor='r', facecolor='none')
+            rect2 = patches.Rectangle((x1, y1), x2 - x1, y2 - y1, linewidth=1, edgecolor='r', facecolor='none')
+            axes[0, i].add_patch(rect1)
+            axes[1, i].add_patch(rect2)
 
     plt.tight_layout()
     plt.show()
@@ -1268,29 +1274,44 @@ def find_n_similar_regions(query_activation, layer_name, train_image_keys, activ
         temp_query_activation = extract_region_activations(temp_query_activation, region_coords, layer_name)
 
     win_w, win_h = temp_query_activation.shape[-2:]
-    stride = max(win_w, win_h)
+    acti_w, acti_h = query_activation.shape[-2:]
+
+    # Define amount of division
+    divisions = acti_w // win_w if acti_w // win_w == acti_h // win_h else -1  # -1 if error or not square
+    if divisions == 0 or divisions == -1:
+        print("Error: Query activation map is not square.")
+        print(f"Activation Map Dimensions: {acti_w}x{acti_h}, Window Dimensions: {win_w}x{win_h}")
+        print(f"temp_querty shape: {temp_query_activation.shape}")
+        print(f"query shape: {query_activation.shape}")
+        print(f"region_coords: {region_coords}")
+        return []
 
     with env.begin() as txn:
         for train_image_key in train_image_keys:
-            train_activation = load_activation(train_image_key, layer_name, env=env)
+            train_activation = load_activation120(train_image_key, layer_name, env=env)
             count_comparisions = 0
             if train_activation is None:
                 continue
 
             _, _, H, W = train_activation.shape  # Activation map dimensions
 
-            # print(f"H: {H}, W: {W}, Win W: {win_w}, Win H: {win_h}, Stride: {stride}")
-            best_match = None  # Store the best matching region in the current image
+            # print(f"H: {H}, W: {W}, Win W: {win_w}, Win H: {win_h}")
 
             # Slide a window over the activation map
-            for y in range(0, H - win_h + 1, stride):
-                for x in range(0, W - win_w + 1, stride):
-                    candidate_activation = train_activation[:, :, y:y+win_h, x:x+win_w]
+            for y in range(divisions):
+                for x in range(divisions):
+                    # Extract candidate region
+                    start_x = x * win_w
+                    start_y = y * win_h
+                    candidate_activation = train_activation[:, :, start_y:start_y + win_h, start_x:start_x + win_w]
 
                     similarity = compute_similarity(temp_query_activation, candidate_activation, metric=metric)
                     count_comparisions += 1
                     # Store top-N matches
-                    heapq.heappush(min_heap, (similarity, train_image_key, (x, y, x+win_w, y+win_h)))
+                    # Example usage
+                    region = get_region(start_x, start_y, win_w, win_h, W, H)
+                    heapq.heappush(min_heap, (similarity, train_image_key, region))
+                    # heapq.heappush(min_heap, (similarity, train_image_key, (x, y, x+win_w, y+win_h)))
 
                     if len(min_heap) > n:
                         heapq.heappop(min_heap)  # Keep only top-N
@@ -1299,8 +1320,33 @@ def find_n_similar_regions(query_activation, layer_name, train_image_keys, activ
     env.close()
     return sorted(min_heap, key=lambda x: x[0], reverse=True)  # Sort by highest similarity
 
+def get_region(x, y, win_w, win_h, image_w, image_h):
+    if x == 0 and y == 0 and win_w == image_w and win_h == image_h:
+        #print(f"Recognized as full image with x: {x}, y: {y}, win_w: {win_w}, win_h: {win_h}, image_w: {image_w}, image_h: {image_h}")
+        return "full image"
+    elif x == 0 and y == 0:
+        #print(f"Recognized as top left with x: {x}, y: {y}, win_w: {win_w}, win_h: {win_h}, image_w: {image_w}, image_h: {image_h}")
+        return "top left"
+    elif x + win_w == image_w and y == 0:
+        #print(f"Recognized as top right with x: {x}, y: {y}, win_w: {win_w}, win_h: {win_h}, image_w: {image_w}, image_h: {image_h}")
+        return "top right"
+    elif x == 0 and y + win_h == image_h:
+        #print(f"Recognized as bottom left with x: {x}, y: {y}, win_w: {win_w}, win_h: {win_h}, image_w: {image_w}, image_h: {image_h}")
+        return "bottom left"
+    elif x + win_w == image_w and y + win_h == image_h:
+        #print(f"Recognized as bottom right with x: {x}, y: {y}, win_w: {win_w}, win_h: {win_h}, image_w: {image_w}, image_h: {image_h}")
+        return "bottom right"
+    elif x == 0:
+        #print(f"Recognized as left half with x: {x}, y: {y}, win_w: {win_w}, win_h: {win_h}, image_w: {image_w}, image_h: {image_h}")
+        return "left half"
+    elif x + win_w == image_w:
+        #print(f"Recognized as right half with x: {x}, y: {y}, win_w: {win_w}, win_h: {win_h}, image_w: {image_w}, image_h: {image_h}")
+        return "right half"
+    else:
+        #print(f"Recognized as unknown region with x: {x}, y: {y}, win_w: {win_w}, win_h: {win_h}, image_w: {image_w}, image_h: {image_h}")
+        return "unknown region"
 
-def display_n_similar_images(query_image, activations_dict, layer_name, image_keys, 
+def display_n_similar_images(query_image, activations_dict, layer_names, image_keys, 
                              activations_lmdb_path, images_lmdb_path, model, 
                              img_hw=(120,120), color_map=color_map, region_coords=None):
     """
@@ -1315,6 +1361,8 @@ def display_n_similar_images(query_image, activations_dict, layer_name, image_ke
     setup_hooks(model, activations_dict)
     activations_dict.clear()
     
+    if not isinstance(layer_names, list): layer_names = [layer_names]
+
     # Get the query mask
     query_image = torch.tensor(query_image, dtype=torch.float32).to(device)
     query_image = pad_image(query_image.unsqueeze(0), img_hw[0], img_hw[1])
@@ -1323,35 +1371,53 @@ def display_n_similar_images(query_image, activations_dict, layer_name, image_ke
     output = inference(query_image, model)
     out_mask_colored = apply_color_map(output.squeeze(0).cpu(), color_map)
     
-    query_activations = activations_dict[layer_name]
+    query_activations = [activations_dict[layer_name] for layer_name in layer_names]
 
     # Find similar images based on activations
-    top_n_results = find_n_similar_regions(query_activations, layer_name, image_keys, activations_lmdb_path, n=5, region_coords=region_coords)
-    print("Top N Results: ", top_n_results)
+    top_n_results = [find_n_similar_regions(query_activations, layer_name, image_keys, activations_lmdb_path, n=5, region_coords=region_coords) for layer_name, query_activations in zip(layer_names, query_activations)]
+    print("   Top N Results: ", top_n_results)
 
-    similar_images, similar_masks, titles = [], [], []
+    for results, layer_name in zip(top_n_results, layer_names):
+        print(f"   Results for layer: {layer_name}")
+        similar_images, similar_masks, titles, draw_boxes = [], [], [], []
+        draw_boxes.append(region_coords) # Draw the query region as a box
     
-    for similarity_score, image_key, region_coords in top_n_results:
-        # Load the images
-        image, _ = get_image_and_mask_from_key(image_key, lmdb_path=images_lmdb_path)
-        image = torch.tensor(image, dtype=torch.float32).to(device)
-        image = pad_image(image.unsqueeze(0), img_hw[0], img_hw[1])
-        # Get the predicted mask
-        pred_mask = model(image).argmax(dim=1).squeeze(0).cpu()
-        pred_mask = apply_color_map(pred_mask, color_map)
+        for similarity_score, image_key, region_descriptor in results:
+            # Load the images
+            image, _ = get_image_and_mask_from_key(image_key, lmdb_path=images_lmdb_path)
+            image = torch.tensor(image, dtype=torch.float32).to(device)
+            image = pad_image(image.unsqueeze(0), img_hw[0], img_hw[1])
+            # Get the predicted mask
+            pred_mask = model(image).argmax(dim=1).squeeze(0).cpu()
+            pred_mask = apply_color_map(pred_mask, color_map)
 
-        # Append results
-        similar_images.append(image.squeeze(0)) # Remove batch dimension
-        similar_masks.append(pred_mask)
-        titles.append(f"{image_key}\nSim: {similarity_score:.3f}\nRegion: {region_coords}")
+            # Append results
+            similar_images.append(image.squeeze(0)) # Remove batch dimension
+            similar_masks.append(pred_mask)
+            titles.append(f"{image_key}\nSim: {similarity_score:.3f}\nRegion: {region_descriptor}")
 
-    plot_similarities(
-        query_image=query_image.squeeze(0), 
-        query_predicted=out_mask_colored, 
-        similar_images=similar_images, 
-        similar_masks=similar_masks, 
-        titles=titles
-    )
+            if region_descriptor == "full image":
+                draw_boxes.append((0,0,img_hw[1],img_hw[0]))
+            elif region_descriptor == "top left":
+                draw_boxes.append((0,0,img_hw[1]//2,img_hw[0]//2))
+            elif region_descriptor == "top right":
+                draw_boxes.append((img_hw[1]//2,0,img_hw[1],img_hw[0]//2))
+            elif region_descriptor == "bottom left":
+                draw_boxes.append((0,img_hw[0]//2,img_hw[1]//2,img_hw[0]))
+            elif region_descriptor == "bottom right":
+                draw_boxes.append((img_hw[1]//2,img_hw[0]//2,img_hw[1],img_hw[0]))
+            else:
+                draw_boxes.append(None)
+
+
+        plot_similarities(
+            query_image=query_image.squeeze(0), 
+            query_predicted=out_mask_colored, 
+            similar_images=similar_images, 
+            similar_masks=similar_masks, 
+            titles=titles,
+            draw_boxes=draw_boxes
+        )
 
 
 
