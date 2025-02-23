@@ -41,8 +41,6 @@ from tqdm import tqdm
 # Tensorboard
 from torch.utils.tensorboard import SummaryWriter
 
-
-
 ''' 
 Basic Parameters
 '''
@@ -340,10 +338,6 @@ def visual_from_lmdb_with_ref(reference_string, bands, lmdb_path):
         axes[i].axis('off')
 
     plt.show()
-import random
-import lmdb
-import torch
-import matplotlib.pyplot as plt
 
 def display_results2(models, loader, lmdb_path, num_images=10, color_map=color_map, pixel_value_to_class_index=pixel_value_to_class_index, indices=None):
     """
@@ -1167,10 +1161,13 @@ def extract_region_activations(activation, region_coords, layer_name):
     new_y1 = int(y1 // factor)
     new_x2 = int(x2 // factor)
     new_y2 = int(y2 // factor)
-
-    # print(f"New Region Coords: ({new_x1}, {new_y1}, {new_x2}, {new_y2})")
+    
+    # Adjust for overlap by ensuring the window size is consistent
+    max_diff = max(new_x2 - new_x1, new_y2 - new_y1)
+    new_x2 = new_x1 + max_diff
+    new_y2 = new_y1 + max_diff
+    
     region_activation = activation[:, :, new_y1:new_y2, new_x1:new_x2]
-
     return region_activation
 
 def get_activation(name, dictionary):
@@ -1277,11 +1274,13 @@ def find_n_similar_regions(query_activation, layer_name, train_image_keys, activ
     acti_w, acti_h = query_activation.shape[-2:]
 
     # Define amount of division
-    divisions = acti_w // win_w if acti_w // win_w == acti_h // win_h else -1  # -1 if error or not square
-    if divisions == 0 or divisions == -1:
+    divisions_w = int(np.ceil(acti_w / win_w))
+    divisions_h = int(np.ceil(acti_h / win_h))
+    
+    if divisions_w == 0 or divisions_h == 0:
         print("Error: Query activation map is not square.")
         print(f"Activation Map Dimensions: {acti_w}x{acti_h}, Window Dimensions: {win_w}x{win_h}")
-        print(f"temp_querty shape: {temp_query_activation.shape}")
+        print(f"temp_query shape: {temp_query_activation.shape}")
         print(f"query shape: {query_activation.shape}")
         print(f"region_coords: {region_coords}")
         return []
@@ -1298,13 +1297,23 @@ def find_n_similar_regions(query_activation, layer_name, train_image_keys, activ
             # print(f"H: {H}, W: {W}, Win W: {win_w}, Win H: {win_h}")
 
             # Slide a window over the activation map
-            for y in range(divisions):
-                for x in range(divisions):
+            for y in range(divisions_h):
+                for x in range(divisions_w):
                     # Extract candidate region
                     start_x = x * win_w
                     start_y = y * win_h
-                    candidate_activation = train_activation[:, :, start_y:start_y + win_h, start_x:start_x + win_w]
 
+                    end_x = min(start_x + win_w, W)
+                    end_y = min(start_y + win_h, H)
+
+                    # Adjust for overlap
+                    if end_x - start_x < win_w:
+                        start_x = W - win_w
+                    if end_y - start_y < win_h:
+                        start_y = H - win_h
+
+                    candidate_activation = train_activation[:, :, start_y:end_y, start_x:end_x]
+                    
                     similarity = compute_similarity(temp_query_activation, candidate_activation, metric=metric)
                     count_comparisions += 1
                     # Store top-N matches
@@ -1375,10 +1384,10 @@ def display_n_similar_images(query_image, activations_dict, layer_names, image_k
 
     # Find similar images based on activations
     top_n_results = [find_n_similar_regions(query_activations, layer_name, image_keys, activations_lmdb_path, n=5, region_coords=region_coords) for layer_name, query_activations in zip(layer_names, query_activations)]
-    print("   Top N Results: ", top_n_results)
 
     for results, layer_name in zip(top_n_results, layer_names):
         print(f"   Results for layer: {layer_name}")
+        print(f"   Top N Results: {results}")
         similar_images, similar_masks, titles, draw_boxes = [], [], [], []
         draw_boxes.append(region_coords) # Draw the query region as a box
     
@@ -1394,7 +1403,8 @@ def display_n_similar_images(query_image, activations_dict, layer_names, image_k
             # Append results
             similar_images.append(image.squeeze(0)) # Remove batch dimension
             similar_masks.append(pred_mask)
-            titles.append(f"{image_key}\nSim: {similarity_score:.3f}\nRegion: {region_descriptor}")
+            #titles.append(f"{image_key}\nSim: {similarity_score:.3f}\nRegion: {region_descriptor}")
+            titles.append(f"Sim: {similarity_score:.3f}\nRegion: {region_descriptor}")
 
             if region_descriptor == "full image":
                 draw_boxes.append((0,0,img_hw[1],img_hw[0]))
