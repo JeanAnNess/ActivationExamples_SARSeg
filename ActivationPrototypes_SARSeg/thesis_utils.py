@@ -164,49 +164,6 @@ SCALE_FACTORS = {
 '''
 LMDB related utilities
 '''
-
-# FIXME: Remove this function
-def match_keys_dynamic(lmdb_path):
-    """
-    OUTDATED!!!!!!!!!!!!!!!!!!!!!!!
-    Matches image keys with their corresponding reference map keys in the LMDB database
-    based on dynamically extracted shared portions.
-
-    Args:
-        lmdb_path (str): Path to the LMDB database.
-
-    Returns:
-        List[Tuple[str, str]]: A list of (image_key, reference_key) pairs.
-    """
-    matches = []
-    env = lmdb.open(lmdb_path, readonly=True, lock = False)
-    with env.begin() as txn:
-        cursor = txn.cursor()
-        image_keys = {}
-        reference_keys = {}
-
-        for key, _ in cursor:
-            key_str = key.decode()  # Decode bytes to string
-
-            # Extract the shared index for image and reference keys dynamically
-            image_match = re.search(r"([A-Z0-9]{5})_(\d+_\d+)$", key_str)
-            reference_match = re.search(r"([A-Z0-9]{5})_(\d+_\d+)_reference_map$", key_str)
-
-            if image_match:
-                shared_index = f"{image_match.group(1)}_{image_match.group(2)}"
-                image_keys[shared_index] = key_str
-            elif reference_match:
-                shared_index = f"{reference_match.group(1)}_{reference_match.group(2)}"
-                reference_keys[shared_index] = key_str
-
-        # Match image keys with reference keys based on shared index
-        for shared_index in image_keys.keys() & reference_keys.keys():
-            matches.append((image_keys[shared_index], reference_keys[shared_index]))
-
-    return matches
-
-
-
 def match_keys(parquet_path):
     """
     Matches image keys with their corresponding reference map keys.
@@ -1049,54 +1006,7 @@ Experiment Utilities
 '''
 Activation LMDB Utilities
 '''
-
 def load_activation(image_reference, layer_name, env):
-    """
-    Find and load the activation for a specific image and layer.
-
-    Args:
-        image_reference (str): The image reference.
-        layer_name (str): The layer name.
-
-    Returns:
-        torch.Tensor: The loaded activation tensor.
-
-    """
-    with env.begin() as txn:
-        # Construct the key to retrieve the activation (same key format used when saving)
-        key = f"{image_reference}_{layer_name}".encode()
-        
-        # Retrieve the activation from the LMDB database
-        activation_data = txn.get(key)
-        
-        if activation_data is not None:
-            # Convert the byte data back to a numpy array
-            activation_array = np.frombuffer(activation_data, dtype=np.float32)
-            
-            # Determine the correct shape based on the layer name
-            if layer_name == 'encoder.layer1':
-                activation_shape = (1, 256, 30, 30)
-            elif layer_name == 'encoder.layer2':
-                activation_shape = (1, 512, 15, 15)
-            elif layer_name == 'encoder.layer3':
-                activation_shape = (1, 1024, 8, 8)
-            elif layer_name == 'encoder.layer4':
-                activation_shape = (1, 2048, 4, 4)
-            else:
-                raise ValueError(f"Unknown layer name: {layer_name}")
-            
-            # Reshape the array to match the original activation shape
-            activation_array = activation_array.reshape(activation_shape)
-            
-            # Convert it to a PyTorch tensor if needed
-            activation_tensor = torch.tensor(activation_array)
-            
-            return activation_tensor
-        else:
-            print(f"Activation for {image_reference} and {layer_name} not found.")
-            return None
-
-def load_activation120(image_reference, layer_name, env):
     """Load the activation tensor from LMDB with optimized retrieval."""
     with env.begin() as txn:
         key = f"{image_reference}_{layer_name}".encode()
@@ -1229,6 +1139,8 @@ def find_n_similar_regions(query_activation, layer_name, train_image_keys, activ
     # Define amount of division
     divisions_w = int(np.ceil(acti_w / win_w))
     divisions_h = int(np.ceil(acti_h / win_h))
+
+    factor = SCALE_FACTORS[layer_name]
     
     if divisions_w == 0 or divisions_h == 0:
         print("Error: Query activation map is not square.")
@@ -1240,7 +1152,7 @@ def find_n_similar_regions(query_activation, layer_name, train_image_keys, activ
 
     with env.begin() as txn:
         for train_image_key in train_image_keys:
-            train_activation = load_activation120(train_image_key, layer_name, env=env)
+            train_activation = load_activation(train_image_key, layer_name, env=env)
             # count_comparisions = 0
             if train_activation is None:
                 continue
@@ -1267,44 +1179,15 @@ def find_n_similar_regions(query_activation, layer_name, train_image_keys, activ
                     candidate_activation_flat = candidate_activation.flatten(start_dim=1)
                     similarity = compute_similarity(query_tensor_flat, candidate_activation_flat, metric=metric)
                     #count_comparisions += 1
-                    # Store top-N matches
-                    # Example usage
-                    region = get_region(x, y, win_w, win_h, W, H)
-                    heapq.heappush(min_heap, (similarity, train_image_key, region))
-                    # heapq.heappush(min_heap, (similarity, train_image_key, (x, y, x+win_w, y+win_h)))
 
+                    # Store top-N matches
+                    region = (x*factor, y*factor, (x+win_w)*factor,(y+win_h)*factor)
+                    heapq.heappush(min_heap, (similarity, train_image_key, region))
                     if len(min_heap) > n:
-                        heapq.heappop(min_heap)  # Keep only top-N
-            # print(f"Compared {count_comparisions} regions in {train_image_key}")
+                        heapq.heappop(min_heap)
 
     env.close()
     return sorted(min_heap, key=lambda x: x[0], reverse=True)  # Sort by highest similarity
-
-def get_region(x, y, win_w, win_h, image_w, image_h):
-    if x == 0 and y == 0 and win_w == image_w and win_h == image_h:
-        #print(f"Recognized as full image with x: {x}, y: {y}, win_w: {win_w}, win_h: {win_h}, image_w: {image_w}, image_h: {image_h}")
-        return "full image"
-    elif x == 0 and y == 0:
-        #print(f"Recognized as top left with x: {x}, y: {y}, win_w: {win_w}, win_h: {win_h}, image_w: {image_w}, image_h: {image_h}")
-        return "top left"
-    elif x + win_w == image_w and y == 0:
-        #print(f"Recognized as top right with x: {x}, y: {y}, win_w: {win_w}, win_h: {win_h}, image_w: {image_w}, image_h: {image_h}")
-        return "top right"
-    elif x == 0 and y + win_h == image_h:
-        #print(f"Recognized as bottom left with x: {x}, y: {y}, win_w: {win_w}, win_h: {win_h}, image_w: {image_w}, image_h: {image_h}")
-        return "bottom left"
-    elif x + win_w == image_w and y + win_h == image_h:
-        #print(f"Recognized as bottom right with x: {x}, y: {y}, win_w: {win_w}, win_h: {win_h}, image_w: {image_w}, image_h: {image_h}")
-        return "bottom right"
-    elif x == 0:
-        #print(f"Recognized as left half with x: {x}, y: {y}, win_w: {win_w}, win_h: {win_h}, image_w: {image_w}, image_h: {image_h}")
-        return "left half"
-    elif x + win_w == image_w:
-        #print(f"Recognized as right half with x: {x}, y: {y}, win_w: {win_w}, win_h: {win_h}, image_w: {image_w}, image_h: {image_h}")
-        return "right half"
-    else:
-        #print(f"Recognized as unknown region with x: {x}, y: {y}, win_w: {win_w}, win_h: {win_h}, image_w: {image_w}, image_h: {image_h}")
-        return "unknown region"
 
 def display_n_similar_images(query_image, activations_dict, layer_names, image_keys, 
                              activations_lmdb_path, images_lmdb_path, model, 
@@ -1354,22 +1237,9 @@ def display_n_similar_images(query_image, activations_dict, layer_names, image_k
             # Append results
             similar_images.append(image.squeeze(0)) # Remove batch dimension
             similar_masks.append(pred_mask)
-            #titles.append(f"{image_key}\nSim: {similarity_score:.3f}\nRegion: {region_descriptor}")
             titles.append(f"Sim: {similarity_score:.3f}\nRegion: {region_descriptor}")
 
-            if region_descriptor == "full image":
-                draw_boxes.append((0,0,img_hw[1],img_hw[0]))
-            elif region_descriptor == "top left":
-                draw_boxes.append((0,0,img_hw[1]//2,img_hw[0]//2))
-            elif region_descriptor == "top right":
-                draw_boxes.append((img_hw[1]//2,0,img_hw[1],img_hw[0]//2))
-            elif region_descriptor == "bottom left":
-                draw_boxes.append((0,img_hw[0]//2,img_hw[1]//2,img_hw[0]))
-            elif region_descriptor == "bottom right":
-                draw_boxes.append((img_hw[1]//2,img_hw[0]//2,img_hw[1],img_hw[0]))
-            else:
-                draw_boxes.append(None)
-
+            draw_boxes.append(region_descriptor)
 
         plot_similarities(
             query_image=query_image.squeeze(0), 
@@ -1379,8 +1249,6 @@ def display_n_similar_images(query_image, activations_dict, layer_names, image_k
             titles=titles,
             draw_boxes=draw_boxes
         )
-
-
 
 ''' 
 Multi-Purpose Utilities
