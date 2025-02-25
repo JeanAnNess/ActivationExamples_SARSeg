@@ -143,6 +143,24 @@ pixel_value_to_class_name = {
 
 pixel_value_to_class_index = {111: 1, 112: 1, 121: 2, 122: 20, 123: 20, 124: 20, 131: 20, 132: 20, 133: 20, 141: 20, 142: 20, 211: 3, 212: 3, 213: 3, 221: 4, 222: 4, 223: 4, 231: 5, 241: 4, 242: 6, 243: 7, 244: 8, 311: 9, 312: 10, 313: 11, 321: 12, 322: 13, 323: 13, 324: 14, 331: 15, 332: 20, 333: 12, 334: 20, 335: 20, 411: 16, 412: 16, 421: 17, 422: 17, 423: 20, 511: 18, 512: 18, 521: 19, 522: 19, 523: 19, 999: 20}
 
+LAYER_SHAPES = {
+    'encoder.layer1': (1, 256, 30, 30),
+    'encoder.layer2': (1, 512, 15, 15),
+    'encoder.layer3': (1, 1024, 8, 8),
+    'encoder.layer4': (1, 2048, 4, 4),
+    'decoder.up1': (1, 256, 8, 8),
+    'decoder.up2': (1, 128, 15, 15),
+    'decoder.up3': (1, 64, 30, 30),
+    'decoder.up4': (1, 32, 60, 60),
+    'decoder.up5': (1, 16, 120, 120),
+}
+
+SCALE_FACTORS = {
+    'encoder.layer1': 4, 'encoder.layer2': 8, 'encoder.layer3': 15, 'encoder.layer4': 30,
+    'decoder.up1': 15, 'decoder.up2': 8, 'decoder.up3': 4, 'decoder.up4': 2, 'decoder.up5': 1
+}
+
+
 '''
 LMDB related utilities
 '''
@@ -1079,96 +1097,32 @@ def load_activation(image_reference, layer_name, env):
             return None
 
 def load_activation120(image_reference, layer_name, env):
-    """
-    Find and load the activation for a specific image and layer.
-
-    Args:
-        image_reference (str): The image reference.
-        layer_name (str): The layer name.
-
-    Returns:
-        torch.Tensor: The loaded activation tensor.
-
-    """
+    """Load the activation tensor from LMDB with optimized retrieval."""
     with env.begin() as txn:
-        # Construct the key to retrieve the activation (same key format used when saving)
         key = f"{image_reference}_{layer_name}".encode()
-        
-        # Retrieve the activation from the LMDB database
         activation_data = txn.get(key)
-        
-        if activation_data is not None:
-            # Convert the byte data back to a numpy array
-            activation_array = np.frombuffer(activation_data, dtype=np.float32)
-            
-            # Determine the correct shape based on the layer name
-            if layer_name == 'encoder.layer1':
-                activation_shape = (1, 256, 30, 30)
-            elif layer_name == 'encoder.layer2':
-                activation_shape = (1, 512, 15, 15)
-            elif layer_name == 'encoder.layer3':
-                activation_shape = (1, 1024, 8, 8)
-            elif layer_name == 'encoder.layer4':
-                activation_shape = (1, 2048, 4, 4)
-            elif layer_name == 'decoder.up1':
-                activation_shape = (1, 256, 8, 8)
-            elif layer_name == 'decoder.up2':
-                activation_shape = (1, 128, 15, 15)
-            elif layer_name == 'decoder.up3':
-                activation_shape = (1, 64, 30, 30)
-            elif layer_name == 'decoder.up4':
-                activation_shape = (1, 32, 60, 60)
-            elif layer_name == 'decoder.up5':
-                activation_shape = (1, 16, 120, 120)
-            else:
-                raise ValueError(f"Unknown layer name: {layer_name}")
-            
-            # Reshape the array to match the original activation shape
-            activation_array = activation_array.reshape(activation_shape)
-            
-            # Convert it to a PyTorch tensor if needed
-            activation_tensor = torch.tensor(activation_array)
-            
-            return activation_tensor
-        else:
-            print(f"Activation for {image_reference} and {layer_name} not found.")
+        if activation_data is None:
             return None
 
+        activation_array = np.frombuffer(activation_data, dtype=np.float32)
+        activation_tensor = torch.from_numpy(activation_array).reshape(LAYER_SHAPES[layer_name])
+        return activation_tensor
+
 def extract_region_activations(activation, region_coords, layer_name):
-    if layer_name == 'encoder.layer1':
-        factor = 4
-    elif layer_name == 'encoder.layer2':
-        factor = 8
-    elif layer_name == 'encoder.layer3':
-        factor = 15
-    elif layer_name == 'encoder.layer4':
-        factor = 30
-    elif layer_name == 'decoder.up1':
-        factor = 15
-    elif layer_name == 'decoder.up2':
-        factor = 8
-    elif layer_name == 'decoder.up3':
-        factor = 4
-    elif layer_name == 'decoder.up4':
-        factor = 2
-    elif layer_name == 'decoder.up5':
-        factor = 1
-    else:
-        raise ValueError(f"Unknown layer name: {layer_name}")
-    
+    """Extracts a specific region from the activation map."""
+    factor = SCALE_FACTORS[layer_name]
+
     x1, y1, x2, y2 = region_coords
     new_x1 = int(x1 // factor)
     new_y1 = int(y1 // factor)
     new_x2 = int(x2 // factor)
     new_y2 = int(y2 // factor)
-    
-    # Adjust for overlap by ensuring the window size is consistent
+
+    # Adjust window size to maintain consistent shape
     max_diff = max(new_x2 - new_x1, new_y2 - new_y1)
-    new_x2 = new_x1 + max_diff
-    new_y2 = new_y1 + max_diff
-    
-    region_activation = activation[:, :, new_y1:new_y2, new_x1:new_x2]
-    return region_activation
+    new_x2, new_y2 = new_x1 + max_diff, new_y1 + max_diff
+
+    return activation[:, :, new_y1:new_y2, new_x1:new_x2]
 
 def get_activation(name, dictionary):
     def hook(model, input, output):
@@ -1184,10 +1138,9 @@ def setup_hooks(model, activations_dict):
 Similarity Utilities
 '''
 
-def compute_similarity(query_activations, train_activations, metric='cosine'):
-    query_flat = query_activations.flatten().cpu().numpy()
-    train_flat = train_activations.flatten().cpu().numpy()
-    return 1 - cdist([query_flat], [train_flat], metric=metric)[0][0]
+def compute_similarity(query_activation_flat, candidate_activation_flat, metric='cosine'):
+    """Compute similarity efficiently using pre-flattened tensors."""
+    return F.cosine_similarity(query_activation_flat, candidate_activation_flat, dim=1).item() if metric == 'cosine' else -torch.norm(query_activation_flat - candidate_activation_flat, dim=1).item()
 
 def plot_similarities(query_image, query_predicted, similar_images, similar_masks, titles, draw_boxes):
     """
@@ -1261,16 +1214,16 @@ def find_n_similar_regions(query_activation, layer_name, train_image_keys, activ
             Sorted list of (similarity_score, image_key, region_coords).
     """
     min_heap = []
-    temp_query_activation = query_activation
     env = lmdb.open(activation_lmdb_path, readonly=True, lock=False)
 
-    original_h, original_w = query_activation.shape[-2:]
-
     # Extract query activation for the specified region
+    query_tensor = query_activation.to(device)
     if region_coords:
-        temp_query_activation = extract_region_activations(temp_query_activation, region_coords, layer_name)
+        query_tensor = extract_region_activations(query_tensor, region_coords, layer_name)
 
-    win_w, win_h = temp_query_activation.shape[-2:]
+    query_tensor_flat = query_tensor.flatten(start_dim=1)
+
+    win_w, win_h = query_tensor.shape[-2:]
     acti_w, acti_h = query_activation.shape[-2:]
 
     # Define amount of division
@@ -1280,7 +1233,7 @@ def find_n_similar_regions(query_activation, layer_name, train_image_keys, activ
     if divisions_w == 0 or divisions_h == 0:
         print("Error: Query activation map is not square.")
         print(f"Activation Map Dimensions: {acti_w}x{acti_h}, Window Dimensions: {win_w}x{win_h}")
-        print(f"temp_query shape: {temp_query_activation.shape}")
+        print(f"temp_query shape: {query_tensor.shape}")
         print(f"query shape: {query_activation.shape}")
         print(f"region_coords: {region_coords}")
         return []
@@ -1288,37 +1241,35 @@ def find_n_similar_regions(query_activation, layer_name, train_image_keys, activ
     with env.begin() as txn:
         for train_image_key in train_image_keys:
             train_activation = load_activation120(train_image_key, layer_name, env=env)
-            count_comparisions = 0
+            # count_comparisions = 0
             if train_activation is None:
                 continue
 
-            _, _, H, W = train_activation.shape  # Activation map dimensions
+            train_tensor = train_activation.to(device)
+            _, _, H, W = train_tensor.shape  # Activation map dimensions
 
             # print(f"H: {H}, W: {W}, Win W: {win_w}, Win H: {win_h}")
 
+            x_positions = list(range(0, W, win_w))
+            if divisions_w * win_w > W:
+                # print("Warning: Activation map is smaller than query window.")
+                x_positions[-1] = W - win_w
+            
+            y_positions = list(range(0, H, win_h))
+            if divisions_h * win_h > H:
+                # print("Warning: Activation map is smaller than query window.")
+                y_positions[-1] = H - win_h
+
             # Slide a window over the activation map
-            for y in range(divisions_h):
-                for x in range(divisions_w):
-                    # Extract candidate region
-                    start_x = x * win_w
-                    start_y = y * win_h
-
-                    end_x = min(start_x + win_w, W)
-                    end_y = min(start_y + win_h, H)
-
-                    # Adjust for overlap
-                    if end_x - start_x < win_w:
-                        start_x = W - win_w
-                    if end_y - start_y < win_h:
-                        start_y = H - win_h
-
-                    candidate_activation = train_activation[:, :, start_y:end_y, start_x:end_x]
-                    
-                    similarity = compute_similarity(temp_query_activation, candidate_activation, metric=metric)
-                    count_comparisions += 1
+            for y in y_positions:
+                for x in x_positions:
+                    candidate_activation = train_tensor[:, :, y:y+win_h, x:x+win_w]
+                    candidate_activation_flat = candidate_activation.flatten(start_dim=1)
+                    similarity = compute_similarity(query_tensor_flat, candidate_activation_flat, metric=metric)
+                    #count_comparisions += 1
                     # Store top-N matches
                     # Example usage
-                    region = get_region(start_x, start_y, win_w, win_h, W, H)
+                    region = get_region(x, y, win_w, win_h, W, H)
                     heapq.heappush(min_heap, (similarity, train_image_key, region))
                     # heapq.heappush(min_heap, (similarity, train_image_key, (x, y, x+win_w, y+win_h)))
 
