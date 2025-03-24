@@ -232,13 +232,6 @@ def get_image_and_mask_from_key(image_key, reference_key = None, lmdb_path=None)
 def keys_from_match(idx, matches):
     """
     Get the image and reference map keys from the matches list based on the index.
-
-    Args:
-        idx (int): The index of the match.
-        matches (List[Tuple[str, str]]): A list of (image_key, reference_key) pairs.
-
-    Returns:
-        Tuple[str, str]: The image key and reference key.
     """
     image_key, reference_key = matches[idx]
     return image_key, reference_key
@@ -246,12 +239,6 @@ def keys_from_match(idx, matches):
 '''
 Mask Functions
 '''
-
-def one_hot_to_class_indices(input_mask):
-    """
-    Converts a one-hot encoded mask to class indices.
-    """
-    return input_mask.argmax(dim=0)
 
 # Function to replace pixel values with class indices
 def replace_pixel_values_with_class_indices(mask, pixel_value_to_class_index):
@@ -1006,6 +993,78 @@ Experiment Utilities
 '''
 Activation LMDB Utilities
 '''
+
+def store_activations(matches, model, lmdb_path, source_lmdb_path, layer_names, break_flag):
+    print("Storing activations in LMDB at path:", lmdb_path)
+
+    # Create LMDB environment
+    env = lmdb.open(lmdb_path, map_size=2*10**10)
+    source_env = lmdb.open(source_lmdb_path, readonly=True)
+
+    # Register hooks to capture activations
+    activations = {}
+    setup_hooks(model, activations)
+
+    # Iterate over the matches and store activations    
+    for idx, match in tqdm(enumerate(matches), total=len(matches)):
+        if break_flag: 
+            break
+        image_key, reference_key = match
+
+        # Load the image data
+        with source_env.begin() as txn:
+            image_data = load(txn.get(image_key.encode()))
+            image_bands = ["VH", "VV"] # Sentinel 1 bands
+            image_tensor = np.stack([image_data[band] for band in image_bands])
+        image_tensor = torch.tensor(image_tensor, dtype=torch.float32).unsqueeze(0).to(device)
+        # image_tensor = pad_image(image_tensor, 128, 128)
+
+        # Perform forward pass to capture activations
+        activations.clear()
+        with torch.no_grad():
+            outputs = model(image_tensor)
+        
+        # Store activations in LMDB
+        batch_activations = {k: v.cpu().numpy() for k, v in activations.items()}
+        with env.begin(write=True) as txn:
+            for layer_name, activation in batch_activations.items():
+                if layer_name not in layer_names:
+                    continue
+                # Create a unique key for each layer's activation   
+                layer_key = f"{image_key}_{layer_name}"
+                txn.put(layer_key.encode(), activation.tobytes())
+
+    env.close()
+    source_env.close()
+
+
+def test_store_activations(model, lmdb_path, source_lmdb, image_reference, layer_name):
+    activations = {}
+    setup_hooks(model, activations)
+
+    env = lmdb.open(lmdb_path, readonly=True)
+    activation_tensor = load_activation(image_reference, layer_name, env = env)
+
+    if activation_tensor is not None:
+        print("Loaded activation shape:", activation_tensor.shape)
+    else: 
+        print("Activation not found")
+    env.close()
+
+    image, mask = get_image_and_mask_from_key(image_reference, lmdb_path = source_lmdb)
+    image = torch.tensor(image, dtype=torch.float32).to(device).unsqueeze(0)
+    # image = pad_image(image, 120, 120)
+
+    # Forward pass to capture activation
+    output = model(image)
+    layer_activations = activations[layer_name]
+
+    # Compare the stored activation with the computed activation
+    # Compare layer1_activations with the loaded activation_tensor
+    if torch.allclose(layer_activations, activation_tensor.to(device)):
+        print("Activations match successfully!")
+
+
 def load_activation(image_reference, layer_name, env):
     """Load the activation tensor from LMDB with optimized retrieval."""
     with env.begin() as txn:
@@ -1217,9 +1276,9 @@ def display_n_similar_images(query_image, activations_dict, layer_names, image_k
     query_activations = [activations_dict[layer_name] for layer_name in layer_names]
 
     # Find similar images based on activations
-    top_n_results = [find_n_similar_regions(query_activations, layer_name, image_keys, activations_lmdb_path, n=5, region_coords=region_coords) for layer_name, query_activations in zip(layer_names, query_activations)]
+    top_n_results = [find_n_similar_regions(query_activations, layer_name, image_keys, activations_lmdb_path, n=50, region_coords=region_coords) for layer_name, query_activations in zip(layer_names, query_activations)]
 
-    for results, layer_name in zip(top_n_results, layer_names):
+    for results, layer_name in zip(top_n_results[:5], layer_names):
         print(f"   Results for layer: {layer_name}")
         print(f"   Top N Results: {results}")
         similar_images, similar_masks, titles, draw_boxes = [], [], [], []
@@ -1249,6 +1308,7 @@ def display_n_similar_images(query_image, activations_dict, layer_names, image_k
             titles=titles,
             draw_boxes=draw_boxes
         )
+    return top_n_results
 
 ''' 
 Multi-Purpose Utilities
@@ -1272,4 +1332,19 @@ def pad_image(img_tensor, target_height, target_width):
     padding = (0, pad_w, 0, pad_h)  # (left, right, top, bottom)
     padded_img = F.pad(img_tensor, padding, mode='constant', value=0)
     return padded_img
+
+def mask_to_pixel_classes(mask, pixel_value_to_class_index):
+    """
+    Determine the present pixel classes in a mask tensor.
+
+    Args:
+        mask (torch.Tensor): The mask tensor to convert.
+        pixel_value_to_class_index (Dict [int, int]): A dictionary mapping pixel values to class indices.
+    
+    Returns:
+        Dict[int, int]: A dictionary mapping pixel classes to their counts.
+    """
+    unique, counts = np.unique(mask, return_counts=True)
+    class_counts = {pixel_value_to_class_index[p]: c for p, c in zip(unique, counts)}
+    return class_counts
 
