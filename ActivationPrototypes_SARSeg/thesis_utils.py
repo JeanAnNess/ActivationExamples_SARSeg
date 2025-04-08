@@ -8,7 +8,6 @@ Imports
 '''
 # Standard Libraries
 import random
-import re
 
 # Plotting
 import matplotlib.pyplot as plt
@@ -274,33 +273,6 @@ def apply_color_map(mask, color_map):
         mask_rgb[mask == class_index] = color
     return mask_rgb
 
-def visual_from_lmdb_with_ref(reference_string, bands, lmdb_path):
-    """
-    Show a visualization of the SAR image and its reference map directly from the LMDB database.
-
-    Args:
-        reference_string (str): The reference string to visualize.
-        bands (List[str]): The bands to visualize.
-        lmdb_path (str): Path to the LMDB database.
-    """
-    env = lmdb.open(lmdb_path, readonly=True)
-    with env.begin() as txn:
-        safetensor_dict = load(txn.get(reference_string.encode()))
-    
-    tensor = np.stack([safetensor_dict[band] for band in bands])
-    
-    # Plotting
-    fig, axes = plt.subplots(1, len(bands), figsize=(18, 6))
-    if len(bands) == 1:
-        axes = [axes]  # Make axes a list if there's only one subplot
-
-    for i, band in enumerate(bands):
-        axes[i].imshow(tensor[i], cmap='gray')
-        axes[i].set_title(f'{reference_string} - {band}')
-        axes[i].axis('off')
-
-    plt.show()
-
 def display_results2(models, loader, lmdb_path, num_images=10, color_map=color_map, pixel_value_to_class_index=pixel_value_to_class_index, indices=None):
     """
     Displays n random masks from an image set with the ground truth and predicted masks from multiple models.
@@ -325,7 +297,7 @@ def display_results2(models, loader, lmdb_path, num_images=10, color_map=color_m
     if indices is None:
         # Randomly sample indices
         indices = random.sample(all_indices, num_images)
-    print(indices)
+    # print(indices)
     
     for idx in indices:
         # Get the image and mask at the sampled index
@@ -338,7 +310,7 @@ def display_results2(models, loader, lmdb_path, num_images=10, color_map=color_m
             real_mask_data = load(txn.get(reference_key.encode()))
         real_mask = real_mask_data["Data"]
 
-        print(f"Image Key: {image_key}, Reference Key: {reference_key}")
+        # print(f"Image Key: {image_key}, Reference Key: {reference_key}")
 
         # Predict the mask for each model
         preds = [inference(image.unsqueeze(0).to(device), model) for model in models]
@@ -1161,7 +1133,7 @@ def plot_similarities(query_image, query_predicted, similar_images, similar_mask
     plt.show()
 
 def find_n_similar_regions(query_activation, layer_name, train_image_keys, activation_lmdb_path, 
-                           n=10, region_coords=None, metric='cosine'):
+                           n=5, region_coords=None, metric='cosine'):
     """
     Find the top-N most similar regions in training images compared to a fixed region in the query image.
     
@@ -1194,6 +1166,7 @@ def find_n_similar_regions(query_activation, layer_name, train_image_keys, activ
 
     win_w, win_h = query_tensor.shape[-2:]
     acti_w, acti_h = query_activation.shape[-2:]
+    # print(f"query_tensor: {query_tensor.shape}, win_w: {win_w}, win_h: {win_h}, acti_w: {acti_w}, acti_h: {acti_h}")
 
     # Define amount of division
     divisions_w = int(np.ceil(acti_w / win_w))
@@ -1248,9 +1221,9 @@ def find_n_similar_regions(query_activation, layer_name, train_image_keys, activ
     env.close()
     return sorted(min_heap, key=lambda x: x[0], reverse=True)  # Sort by highest similarity
 
-def display_n_similar_images(query_image, activations_dict, layer_names, image_keys, 
+def find_n_similar_images(query_image, layer_names, image_keys, 
                              activations_lmdb_path, images_lmdb_path, model, 
-                             img_hw=(120,120), color_map=color_map, region_coords=None):
+                             img_hw=(120,120), color_map=color_map, region_coords=None, n = 5, plotting = True):
     """
     Displays the query image alongside the most similar image regions.
 
@@ -1260,8 +1233,9 @@ def display_n_similar_images(query_image, activations_dict, layer_names, image_k
     """
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
-    setup_hooks(model, activations_dict)
-    activations_dict.clear()
+    activations = {}
+    setup_hooks(model, activations)
+    activations.clear()
     
     if not isinstance(layer_names, list): layer_names = [layer_names]
 
@@ -1273,18 +1247,20 @@ def display_n_similar_images(query_image, activations_dict, layer_names, image_k
     output = inference(query_image, model)
     out_mask_colored = apply_color_map(output.squeeze(0).cpu(), color_map)
     
-    query_activations = [activations_dict[layer_name] for layer_name in layer_names]
+    query_activations = [activations[layer_name] for layer_name in layer_names]
 
     # Find similar images based on activations
     top_n_results = [find_n_similar_regions(query_activations, layer_name, image_keys, activations_lmdb_path, n=50, region_coords=region_coords) for layer_name, query_activations in zip(layer_names, query_activations)]
 
-    for results, layer_name in zip(top_n_results[:5], layer_names):
+    if not plotting: return top_n_results
+
+    for results, layer_name in zip(top_n_results, layer_names):
         print(f"   Results for layer: {layer_name}")
         print(f"   Top N Results: {results}")
         similar_images, similar_masks, titles, draw_boxes = [], [], [], []
         draw_boxes.append(region_coords) # Draw the query region as a box
     
-        for similarity_score, image_key, region_descriptor in results:
+        for similarity_score, image_key, region_descriptor in results[:n]:
             # Load the images
             image, _ = get_image_and_mask_from_key(image_key, lmdb_path=images_lmdb_path)
             image = torch.tensor(image, dtype=torch.float32).to(device)
@@ -1309,6 +1285,124 @@ def display_n_similar_images(query_image, activations_dict, layer_names, image_k
             draw_boxes=draw_boxes
         )
     return top_n_results
+
+'''
+Overlap Utilities
+'''
+def get_top_subset(layer, top_n):
+    """Return a set of unique keys for the first top_n entries of the layer."""
+    return {name for (score, name, region) in layer[:top_n]}
+
+def get_pairwise_comparisons(list_of_lists, layer_names, n1 = 5, n2 = 5):
+    """
+    Compare lists pairwise.
+    
+    Args:
+        lists (list of lists): List of lists to compare. Each list should contain tuples of (similarity, reference, region).
+        n1 (int): Number of elements to consider from list1.
+        n2 (int): Number of elements to consider from list2.
+
+    Returns a dictionary with pairwise overlaps.
+    """
+    results = {}
+    n = len(lists_of_lists)
+
+    # Precompute sets for each layer:
+    top_n1_sets = [get_top_subset(layer, n1) for layer in list_of_lists]
+    top_n2_sets = [get_top_subset(layer, n2) for layer in list_of_lists]
+
+    for i in range(n):
+        for j in range(n):
+            if i == j:
+                continue # this is not symmetrical!
+            # Overlap between layer i and j top_n results
+            overlap = top_n1_sets[i].intersection(top_n2_sets[j])
+            results[(i, j)] = {
+                'First Layer': layer_names[i],
+                'Second Layer': layer_names[j],
+                'Overlap Top X with Top Y': (n1,n2),
+                'overlap_count': len(overlap),
+                'overlap': overlap
+            }
+    return results
+
+def get_pairwise_overlap(list_of_lists, layer_names):
+    results = {}
+    n = len(list_of_lists)
+
+    # Precompute sets for each layer:
+    top_5_sets = [get_top_subset(layer, 5) for layer in list_of_lists]
+    top_10_sets = [get_top_subset(layer, 10) for layer in list_of_lists]
+    top_20_sets = [get_top_subset(layer, 20) for layer in list_of_lists]
+    top_50_sets = [get_top_subset(layer, 50) for layer in list_of_lists]
+    
+    #for i in range(n):
+    #    print(f"Top {top_n} for layer {i}: {top_n_sets[i]}")
+    
+    # Compare each pair (i, j)
+    for i in range(n):
+        for j in range(i + 1, n):
+            # Overlap between layer i and j top_n results
+            overlap_5 = top_5_sets[i].intersection(top_5_sets[j])
+            overlap_10 = top_10_sets[i].intersection(top_10_sets[j])
+            overlap_20 = top_20_sets[i].intersection(top_20_sets[j])
+            overlap_50 = top_50_sets[i].intersection(top_50_sets[j])
+
+            results[(i, j)] = {
+                'First Layer': layer_names[i],
+                'Second Layer': layer_names[j],
+                'top 5': len(overlap_5),
+                'top 10': len(overlap_10),
+                'top 20': len(overlap_20),
+                'top 50': len(overlap_50),
+                'overlap top 5': overlap_5,
+                'overlap top 10': overlap_10,
+                'overlap top 20': overlap_20,
+                'overlap top 50': overlap_50
+            }
+    return results
+
+def get_aggregate_overlaps(all_image_layers, layer_names):
+    """
+    For each image (a list of layers), compute pairwise overlaps and average the overlap
+    counts across all images for the same layer pair.
+    
+    Args:
+        overlap_results (dict): Dictionary with pairwise overlaps.
+
+    Returns a dictionary with aggregated results.
+    """
+    aggregated = {}
+    for image_layers in all_image_layers:
+        # Compute overlaps for current image.
+        results = get_pairwise_overlap(image_layers, layer_names)
+        for key, value in results.items():
+            # key is (i, j) corresponding to the layer indices.
+            if key not in aggregated:
+                aggregated[key] = {
+                    'First Layer': value['First Layer'],
+                    'Second Layer': value['Second Layer'],
+                    'top 5': [],
+                    'top 10': [],
+                    'top 20': [],
+                    'top 50': []
+                }
+            for metric in ['top 5', 'top 10', 'top 20', 'top 50']:
+                aggregated[key][metric].append(value[metric])
+
+    # Average the overlap counts for each layer pair.
+    averaged = {}
+    for key, value in aggregated.items():
+        averaged[key] = {
+            'First Layer': value['First Layer'],
+            'Second Layer': value['Second Layer'],
+            'top 5': np.mean(value['top 5']),
+            'top 10': np.mean(value['top 10']),
+            'top 20': np.mean(value['top 20']),
+            'top 50': np.mean(value['top 50']),
+        }
+
+    return averaged
 
 ''' 
 Multi-Purpose Utilities
@@ -1348,3 +1442,56 @@ def mask_to_pixel_classes(mask, pixel_value_to_class_index):
     class_counts = {pixel_value_to_class_index[p]: c for p, c in zip(unique, counts)}
     return class_counts
 
+
+def show_overlap_matrix(data, targets, layer_names, mode = "overlap"):
+    """
+    Visualize the overlap matrix for different layers and targets.
+
+    Args:
+        data (Dict): Dictionary containing the overlap data.
+        targets (List[str]): List of target names (e.g. "top 5")
+        layer_names (List[str]): List of layer names (e.g. "encoder.layer3")
+    
+    """
+
+    if not isinstance(layer_names, list): layer_names = [layer_names]
+    if not isinstance(targets, list): targets = [targets]
+    
+    # Loop over all targets"
+    for target in targets:
+        matrix = np.zeros((len(layer_names), len(layer_names)))
+        for i in range(len(layer_names)):
+            for j in range(len(layer_names)):
+                if i != j:
+                    # Get the overlap count for the target
+                    if (i, j) in data.keys():
+                        matrix[i,j] = data[(i, j)][target]
+                    elif (j, i) in data.keys():
+                        matrix[i,j] = data[(j, i)][target]
+                    else:
+                        matrix[i,j] = 0 # usually when i = j
+                    
+        # Convert the matrix to a DataFrame for better visualization
+        fig, ax = plt.subplots(figsize=(8, 6))
+        fig.colorbar(ax.matshow(matrix, cmap='Blues'))
+
+        # Annotate heatmap
+        for i in range(len(layer_names)):
+            for j in range(len(layer_names)):
+                ax.text(j, i, matrix[i, j], ha="center", va="center", color="black")
+                
+        if mode == "overlap":
+            title = f"Overlap Matrix - {target}"
+        else:
+            (n1,n2) = data[(0,1)]['Overlap Top X with Top Y']
+            title = f"Top {n1} Overlap with Top {n2}"
+
+        # Set the ticks and labels
+        ax.set_xticks(range(len(layer_names)))
+        ax.set_yticks(range(len(layer_names)))
+        ax.set_xticklabels(layer_names, rotation=45)
+        ax.set_yticklabels(layer_names)
+        plt.title(title)
+        plt.xlabel("Other Layers")
+        plt.ylabel("Current Layer")
+        plt.show()
