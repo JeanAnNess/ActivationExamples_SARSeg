@@ -1049,21 +1049,27 @@ def load_activation(image_reference, layer_name, env):
         activation_tensor = torch.from_numpy(activation_array).reshape(LAYER_SHAPES[layer_name])
         return activation_tensor
 
+
 def extract_region_activations(activation, region_coords, layer_name):
-    """Extracts a specific region from the activation map."""
-    factor = SCALE_FACTORS[layer_name]
+    factor = SCALE_FACTORS.get(layer_name)
+    if factor is None:
+        raise ValueError(f"Layer '{layer_name}' not found in SCALE_FACTORS.")
 
     x1, y1, x2, y2 = region_coords
-    new_x1 = int(x1 // factor)
-    new_y1 = int(y1 // factor)
-    new_x2 = int(x2 // factor)
-    new_y2 = int(y2 // factor)
+    # print(f"Original coordinates: {x1}, {y1}, {x2}, {y2}")
+    # print(f"Scaling factor: {factor}")
 
-    # Adjust window size to maintain consistent shape
-    max_diff = max(new_x2 - new_x1, new_y2 - new_y1)
-    new_x2, new_y2 = new_x1 + max_diff, new_y1 + max_diff
+    # Use rounding for starting coordinates and ceil for ending coordinates.
+    scaled_x1 = int(np.round(x1 / factor))
+    scaled_y1 = int(np.round(y1 / factor))
+    scaled_x2 = int(np.ceil(x2 / factor))
+    scaled_y2 = int(np.ceil(y2 / factor))
+    # print(f"Scaled coordinates: {scaled_x1}, {scaled_y1}, {scaled_x2}, {scaled_y2}")
 
-    return activation[:, :, new_y1:new_y2, new_x1:new_x2]
+    extracted = activation[:, :, scaled_y1:scaled_y2, scaled_x1:scaled_x2]
+    # print(f"Extracted region shape: {extracted.shape}")
+    return extracted
+
 
 def get_activation(name, dictionary):
     def hook(model, input, output):
@@ -1159,6 +1165,7 @@ def find_n_similar_regions(query_activation, layer_name, train_image_keys, activ
 
     # Extract query activation for the specified region
     query_tensor = query_activation.to(device)
+
     if region_coords:
         query_tensor = extract_region_activations(query_tensor, region_coords, layer_name)
 
@@ -1166,14 +1173,13 @@ def find_n_similar_regions(query_activation, layer_name, train_image_keys, activ
 
     win_w, win_h = query_tensor.shape[-2:]
     acti_w, acti_h = query_activation.shape[-2:]
-    # print(f"query_tensor: {query_tensor.shape}, win_w: {win_w}, win_h: {win_h}, acti_w: {acti_w}, acti_h: {acti_h}")
 
     # Define amount of division
     divisions_w = int(np.ceil(acti_w / win_w))
     divisions_h = int(np.ceil(acti_h / win_h))
 
     factor = SCALE_FACTORS[layer_name]
-    
+
     if divisions_w == 0 or divisions_h == 0:
         print("Error: Query activation map is not square.")
         print(f"Activation Map Dimensions: {acti_w}x{acti_h}, Window Dimensions: {win_w}x{win_h}")
@@ -1192,8 +1198,6 @@ def find_n_similar_regions(query_activation, layer_name, train_image_keys, activ
             train_tensor = train_activation.to(device)
             _, _, H, W = train_tensor.shape  # Activation map dimensions
 
-            # print(f"H: {H}, W: {W}, Win W: {win_w}, Win H: {win_h}")
-
             x_positions = list(range(0, W, win_w))
             if divisions_w * win_w > W:
                 # print("Warning: Activation map is smaller than query window.")
@@ -1203,6 +1207,9 @@ def find_n_similar_regions(query_activation, layer_name, train_image_keys, activ
             if divisions_h * win_h > H:
                 # print("Warning: Activation map is smaller than query window.")
                 y_positions[-1] = H - win_h
+
+            # print("Debug: X Positions:", x_positions)
+            # print("Debug: Y Positions:", y_positions)
 
             # Slide a window over the activation map
             for y in y_positions:
@@ -1291,9 +1298,9 @@ Overlap Utilities
 '''
 def get_top_subset(layer, top_n):
     """Return a set of unique keys for the first top_n entries of the layer."""
-    return {name for (score, name, region) in layer[:top_n]}
+    return {(name, region) for (score, name, region) in layer[:top_n]}
 
-def get_pairwise_comparisons(list_of_lists, layer_names, n1 = 5, n2 = 5):
+def get_pairwise_comparisons(list_of_lists, layer_names, n1 = 5, n2 = 5, eta = 0.85):
     """
     Compare lists pairwise.
     
@@ -1305,18 +1312,23 @@ def get_pairwise_comparisons(list_of_lists, layer_names, n1 = 5, n2 = 5):
     Returns a dictionary with pairwise overlaps.
     """
     results = {}
-    n = len(lists_of_lists)
+    n = len(layer_names)
 
     # Precompute sets for each layer:
     top_n1_sets = [get_top_subset(layer, n1) for layer in list_of_lists]
     top_n2_sets = [get_top_subset(layer, n2) for layer in list_of_lists]
 
     for i in range(n):
-        for j in range(n):
+        for j in range(i+1, n):
             if i == j:
                 continue # this is not symmetrical!
-            # Overlap between layer i and j top_n results
-            overlap = top_n1_sets[i].intersection(top_n2_sets[j])
+
+            overlap = set()
+            for ref1, region1 in top_n1_sets[i]:
+                for ref2, region2 in top_n2_sets[j]:
+                    if ref1 == ref2 and regions_match_via_iou(region1, region2, eta):
+                        overlap.add((ref1, region1))
+
             results[(i, j)] = {
                 'First Layer': layer_names[i],
                 'Second Layer': layer_names[j],
@@ -1326,27 +1338,50 @@ def get_pairwise_comparisons(list_of_lists, layer_names, n1 = 5, n2 = 5):
             }
     return results
 
-def get_pairwise_overlap(list_of_lists, layer_names):
+def get_pairwise_overlap(list_of_lists, layer_names, eta = 0.85):
     results = {}
-    n = len(list_of_lists)
-
+    n = len(layer_names)
     # Precompute sets for each layer:
     top_5_sets = [get_top_subset(layer, 5) for layer in list_of_lists]
     top_10_sets = [get_top_subset(layer, 10) for layer in list_of_lists]
     top_20_sets = [get_top_subset(layer, 20) for layer in list_of_lists]
     top_50_sets = [get_top_subset(layer, 50) for layer in list_of_lists]
     
+    
+    #for i in range(n):
+    #    print(f"Top {top_n} for layer {i}: {top_n_sets[i]}")
+    
+
     #for i in range(n):
     #    print(f"Top {top_n} for layer {i}: {top_n_sets[i]}")
     
     # Compare each pair (i, j)
     for i in range(n):
         for j in range(i + 1, n):
-            # Overlap between layer i and j top_n results
-            overlap_5 = top_5_sets[i].intersection(top_5_sets[j])
-            overlap_10 = top_10_sets[i].intersection(top_10_sets[j])
-            overlap_20 = top_20_sets[i].intersection(top_20_sets[j])
-            overlap_50 = top_50_sets[i].intersection(top_50_sets[j])
+            overlap_5 = set()
+            overlap_10 = set()
+            overlap_20 = set()
+            overlap_50 = set()
+
+            for ref1, region1 in top_5_sets[i]:
+                for ref2, region2 in top_5_sets[j]:
+                    if ref1 == ref2 and regions_match_via_iou(region1, region2, eta):
+                        overlap_5.add((ref1, region1))
+            
+            for ref1, region1 in top_10_sets[i]:
+                for ref2, region2 in top_10_sets[j]:
+                    if ref1 == ref2 and regions_match_via_iou(region1, region2, eta):
+                        overlap_10.add((ref1, region1))
+            
+            for ref1, region1 in top_20_sets[i]:
+                for ref2, region2 in top_20_sets[j]:
+                    if ref1 == ref2 and regions_match_via_iou(region1, region2, eta):
+                        overlap_20.add((ref1, region1))
+
+            for ref1, region1 in top_50_sets[i]:
+                for ref2, region2 in top_50_sets[j]:
+                    if ref1 == ref2 and regions_match_via_iou(region1, region2, eta):
+                        overlap_50.add((ref1, region1))
 
             results[(i, j)] = {
                 'First Layer': layer_names[i],
@@ -1362,7 +1397,26 @@ def get_pairwise_overlap(list_of_lists, layer_names):
             }
     return results
 
-def get_aggregate_overlaps(all_image_layers, layer_names):
+def regions_match_via_iou(r1, r2, eta=0.7):
+    """Returns True if IoU between r1 and r2 is above eta"""
+    x1 = max(r1[0], r2[0])
+    y1 = max(r1[1], r2[1])
+    x2 = min(r1[2], r2[2])
+    y2 = min(r1[3], r2[3])
+    inter_area = max(0, x2 - x1) * max(0, y2 - y1)
+
+    area1 = (r1[2] - r1[0]) * (r1[3] - r1[1])
+    area2 = (r2[2] - r2[0]) * (r2[3] - r2[1])
+    union_area = area1 + area2 - inter_area
+    # print(f"r1: {r1}, r2: {r2}, x1: {x1}, y1: {y1}, x2: {x2}, y2: {y2}\n")
+    # print(f"inter_area: {inter_area}, area1: {area1}, area2: {area2}, union_area: {union_area}\n")
+
+    iou = inter_area / union_area if union_area > 0 else 0
+    # print(f"iou: {iou}, eta: {eta}")
+    return iou >= eta
+
+
+def get_aggregate_overlaps(all_image_layers, layer_names, eta = 0.85):
     """
     For each image (a list of layers), compute pairwise overlaps and average the overlap
     counts across all images for the same layer pair.
@@ -1372,10 +1426,11 @@ def get_aggregate_overlaps(all_image_layers, layer_names):
 
     Returns a dictionary with aggregated results.
     """
+    print(f"eta: {eta}")
     aggregated = {}
     for image_layers in all_image_layers:
         # Compute overlaps for current image.
-        results = get_pairwise_overlap(image_layers, layer_names)
+        results = get_pairwise_overlap(image_layers, layer_names, eta)
         for key, value in results.items():
             # key is (i, j) corresponding to the layer indices.
             if key not in aggregated:
