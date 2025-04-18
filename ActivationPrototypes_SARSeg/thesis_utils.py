@@ -1298,6 +1298,7 @@ Overlap Utilities
 '''
 def get_top_subset(layer, top_n):
     """Return a set of unique keys for the first top_n entries of the layer."""
+    # print("Debug:", layer[:top_n])
     return {(name, region) for (score, name, region) in layer[:top_n]}
 
 def get_pairwise_comparisons(list_of_lists, layer_names, n1 = 5, n2 = 5, eta = 0.85):
@@ -1426,7 +1427,7 @@ def get_aggregate_overlaps(all_image_layers, layer_names, eta = 0.85):
 
     Returns a dictionary with aggregated results.
     """
-    print(f"eta: {eta}")
+    # print(f"eta: {eta}")
     aggregated = {}
     for image_layers in all_image_layers:
         # Compute overlaps for current image.
@@ -1533,7 +1534,7 @@ def show_overlap_matrix(data, targets, layer_names, mode = "overlap"):
         # Annotate heatmap
         for i in range(len(layer_names)):
             for j in range(len(layer_names)):
-                ax.text(j, i, matrix[i, j], ha="center", va="center", color="black")
+                ax.text(j, i, round(matrix[i, j],2), ha="center", va="center", color="black")
                 
         if mode == "overlap":
             title = f"Overlap Matrix - {target}"
