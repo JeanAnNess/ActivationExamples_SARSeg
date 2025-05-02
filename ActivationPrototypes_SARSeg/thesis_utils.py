@@ -46,27 +46,38 @@ Basic Parameters
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
 color_map = {
-    1: [255, 0, 0],       # Urban fabric (Red)
-    2: [255, 69, 0],      # Industrial or commercial units (Orange-Red)
-    3: [255, 165, 0],     # Arable land (Orange)
-    4: [255, 255, 0],     # Permanent crops (Yellow)
-    5: [173, 255, 47],    # Pastures (Green-Yellow)
-    6: [34, 139, 34],     # Complex cultivation patterns (Forest Green)
-    7: [192, 192, 192],   # Land principally occupied by agriculture, with significant areas of natural vegetation (Silver)
-    8: [128, 128, 0],     # Agro-forestry areas (Olive)
-    9: [0, 100, 0],       # Broad-leaved forest (Dark Green)
-    10: [0, 128, 0],      # Coniferous forest (Green)
-    11: [34, 139, 34],    # Mixed forest (Forest Green)
-    12: [154, 205, 50],   # Natural grassland and sparsely vegetated areas (Yellow-Green)
-    13: [107, 142, 35],   # Moors, heathland and sclerophyllous vegetation (Olive Drab)
-    14: [255, 255, 224],  # Transitional woodland, shrub (Light Yellow)
+    1:  [206, 206, 206],  # Urban fabric (Gray)
+    2:  [64,  64,  64],   # Industrial or commercial units (Light Gray)
+    3:  [254, 215, 119],  # Arable land (Orange)
+    4:  [254, 187, 71],   # Permanent crops (Yellow)
+    5:  [253, 152, 40],   # Pastures (Green-Yellow)
+    6:  [239, 120, 24],   # Complex cultivation patterns (Forest Green)
+    7:  [216, 89,  8],    # Land principally occupied by agriculture, with significant areas of natural vegetation (light green-yellow)
+    8:  [183, 66,  2],    # Agro-forestry areas (Olive)
+    9:  [200, 232, 154],  # Broad-leaved forest (Dark Green)
+    10: [162, 216, 137],  # Coniferous forest (Green)
+    11: [119, 197, 120],  # Mixed forest (Forest Green)
+    12: [75,  176, 98],   # Natural grassland and sparsely vegetated areas (Yellow-Green)
+    13: [46,  146, 76],   # Moors, heathland and sclerophyllous vegetation (Olive Drab)
+    14: [21,  120, 62],   # Transitional woodland, shrub (Light Green)
     15: [210, 180, 140],  # Beaches, dunes, sands (Tan)
-    16: [0, 255, 255],    # Inland wetlands (Cyan)
-    17: [0, 191, 255],    # Coastal wetlands (Deep Sky Blue)
-    18: [0, 0, 255],      # Inland waters (Blue)
-    19: [25, 25, 112],    # Marine waters (Midnight Blue)
+    16: [182, 212, 233],  # Inland wetlands (Cyan)
+    17: [120, 181, 216],  # Coastal wetlands (Deep Sky Blue)
+    18: [63,  143, 196],  # Inland waters (Blue)
+    19: [23,  100, 171],  # Marine waters (Midnight Blue)
     20: [255, 255, 255],  # Unlabeled (White)
 }
+
+groups = {
+    "urban":               [1, 2],
+    "agriculture":         [3, 4, 5, 6, 7, 8],
+    "forest":              [9, 10, 11, 12, 13, 14],
+    "sand":                [15],
+    "water_wetlands":      [16, 17, 18, 19],
+    "unlabeled":           [20],
+}
+
+proximity_lists = list(groups.values())
 
 class_name_to_index = {
     "Urban fabric": 1,
@@ -240,7 +251,7 @@ Mask Functions
 '''
 
 # Function to replace pixel values with class indices
-def replace_pixel_values_with_class_indices(mask, pixel_value_to_class_index):
+def replace_pixel_values_with_class_indices(mask, pixel_value_to_class_index = pixel_value_to_class_index):
     """
     Replaces pixel values with class indices in the mask.
     """ 
@@ -256,7 +267,7 @@ def replace_pixel_values_with_class_indices(mask, pixel_value_to_class_index):
 Visualization Functions
 '''
 
-def apply_color_map(mask, color_map):
+def apply_color_map(mask, color_map = color_map):
     """
     Apply a color map to a mask.
 
@@ -524,6 +535,111 @@ def load_base_with_bigearth_pretrained(num_classes= 20):
 '''
 120x120 Model
 '''
+class CustomDecoderSkipConn(nn.Module):
+    def __init__(self, in_channels, decoder_channels):
+        super().__init__()
+
+        # Define upsampling blocks with transposed convolution + ConvBlock
+        def up_block(in_ch, out_ch, scale_factor):
+            return nn.Sequential(
+                nn.Upsample(scale_factor=scale_factor, mode='bilinear', align_corners=True),
+                nn.Conv2d(in_ch, out_ch, kernel_size=3, padding=1),
+                nn.BatchNorm2d(out_ch),
+                nn.ReLU(inplace=True)
+            )
+
+        self.up1 = up_block(in_channels, decoder_channels[0], scale_factor=8/4)     # 4 → 8
+        self.up2 = up_block(decoder_channels[0] + 1024, decoder_channels[1], scale_factor=15/8)  # Concatenate with encoder output (8 → 15)
+        self.up3 = up_block(decoder_channels[1] + 512, decoder_channels[2], scale_factor=30/15)  # 15 → 30
+        self.up4 = up_block(decoder_channels[2] + 256, decoder_channels[3], scale_factor=60/30)  # 30 → 60
+        self.up5 = up_block(decoder_channels[3] + 64, decoder_channels[4], scale_factor=120/60)  # 60 → 120
+        
+    def forward(self, x, skip_connections):
+        # print("skip_connections shape:", [f.shape for f in skip_connections])
+        x = self.up1(x)
+        x = torch.cat([x, skip_connections[4]], dim=1)  # Concatenate with the 4th encoder output
+        x = self.up2(x)
+        x = torch.cat([x, skip_connections[3]], dim=1)  # Concatenate with the 3rd encoder output
+        x = self.up3(x)
+        x = torch.cat([x, skip_connections[2]], dim=1)  # Concatenate with the 2nd encoder output
+        x = self.up4(x)
+        x = torch.cat([x, skip_connections[1]], dim=1)  # Concatenate with the 1st encoder output
+        x = self.up5(x)
+        return x
+
+class CustomUnetSkipConn(smp.Unet):
+    def __init__(
+        self,
+        encoder_name: str = "resnet50",
+        encoder_weights=None,
+        decoder_channels=(256, 128, 64, 32, 16),
+        in_channels: int = 2,
+        classes: int = 20,
+        activation="softmax",
+    ):
+        super().__init__(encoder_name=encoder_name, encoder_weights=encoder_weights, in_channels=in_channels, classes=classes, activation=activation)
+
+        self.decoder = CustomDecoderSkipConn(in_channels=self.encoder.out_channels[-1], decoder_channels=decoder_channels)
+
+        self.segmentation_head = SegmentationHead(
+            in_channels=decoder_channels[-1],
+            out_channels=classes,
+            activation=activation,
+            kernel_size=3,
+        )
+        print("CustomUnet initialized with encoder channels:", self.encoder.out_channels)
+
+    def forward(self, x):
+        features = self.encoder(x)  # Get encoder features
+        x = features[-1]  # Last encoder layer
+        skip_connections = features[:-1] 
+
+        # Pass the feature map through the decoder and add skip connections
+        x = self.decoder(x, skip_connections)
+        x = self.segmentation_head(x)
+        return x
+
+
+def create_base_model_skipconn(backbone ='resnet50', weights = None, in_channel = 2, num_classes = 20):
+    model = CustomUnetSkipConn(
+        encoder_name= backbone,     # Pretrained encoder, adjust if necessary
+        encoder_weights=weights,    # No ImageNet weights since SAR images are different
+        in_channels=in_channel,     # Two bands (VH, VV)
+        classes=num_classes,        # Number of segmentation classes
+        activation="softmax",       # Output activation
+    )
+    return model
+
+def load_from_checkpoint_skipconn(checkpoint_path, num_classes= 20):
+    model = create_base_model_skipconn(num_classes = num_classes)
+    checkpoint = torch.load(checkpoint_path, weights_only=True)
+    model.load_state_dict(torch.load(checkpoint_path, weights_only = True), strict=False)
+    return model
+
+def load_base_with_bigearth_pretrained_skipconn(num_classes= 20):
+    # Load the pretrained model
+    model = create_base_model_skipconn(num_classes = num_classes)
+    model_bigearth_classifier = BigEarthNetv2_0_ImageClassifier.from_pretrained(
+        "BIFOLD-BigEarthNetv2-0/resnet50-s1-v0.1.1"
+    )
+    pretrained_weights = model_bigearth_classifier.state_dict()
+
+    # Create a mapping from the pretrained model keys to the untrained model keys
+    key_mapping = {
+        pretrained_key: pretrained_key.replace("model.vision_encoder", "encoder")
+        for pretrained_key in pretrained_weights.keys()
+        if pretrained_key.startswith("model.vision_encoder")
+    }
+
+    # Map weights to the untrained model
+    mapped_state_dict = {
+        untrained_key: pretrained_weights[pretrained_key]
+        for pretrained_key, untrained_key in key_mapping.items()
+    }
+    # Load the model
+    missing_keys, unexpected_keys = model.load_state_dict(mapped_state_dict, strict=False)
+    return model
+
 
 class CustomDecoder(nn.Module):
     def __init__(self, in_channels, decoder_channels):
@@ -572,6 +688,7 @@ class CustomUnet(smp.Unet):
             activation=activation,
             kernel_size=3,
         )
+        print("CustomUnet initialized with encoder channels:", self.encoder.out_channels)
 
     def forward(self, x):
         features = self.encoder(x)
@@ -622,31 +739,52 @@ def load_base_with_bigearth_pretrained120():
 '''
 Training and Inference Utilities
 '''
-
-def training(model, epoch_start, epoch_end, loss_fn, train_loader, val_loader, num_classes, 
-             lr=1e-4, model_name="unet120", freeze_epochs=2):
-    
-    print(f"Training started for {model_name} from epoch {epoch_start} to {epoch_end}")
+def training(model,
+             epoch_start,
+             epoch_end,
+             train_loader,
+             val_loader,
+             num_classes,
+             lr=1e-4,
+             model_name="unet120",
+             freeze_epochs=2,
+             loss_weights=(1.0, 1.0)):
+    """
+    Training loop with combined Focal + Dice loss, per-class IoU/F1 logging, and tqdm progress bars.
+    """
     writer = SummaryWriter()
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     device_type = "cuda" if torch.cuda.is_available() else "cpu"
     model.to(device)
 
+    # Instantiate losses
+    focal_loss = FocalLoss(mode='multiclass', ignore_index=20)  
+    dice_loss = DiceLoss(mode='multiclass', ignore_index=20)  
+    w_focal, w_dice = loss_weights
+    
+
     # Optimizer & Scheduler
     optimizer = optim.AdamW(model.parameters(), lr=lr, weight_decay=1e-4)
-    scheduler = optim.lr_scheduler.ReduceLROnPlateau(optimizer, mode="min", factor=0.5, patience=2, verbose=True)
+    scheduler = optim.lr_scheduler.ReduceLROnPlateau(optimizer, mode="min", factor=0.5, patience=2)
+    # total_steps = (epoch_end - epoch_start + 1) * len(train_loader)
+    # scheduler = optim.lr_scheduler.OneCycleLR(optimizer,
+    #                        max_lr=lr * 10,
+    #                        total_steps=total_steps,
+    #                        pct_start=0.3,
+    #                        anneal_strategy='cos',
+    #                        cycle_momentum=False)
 
+    # print(f"Num epochs: {epoch_end - epoch_start + 1}, Num batches: {len(train_loader)}, Total steps: {total_steps}")
     scaler = GradScaler()  # Mixed precision
     best_val_loss = float('inf')
     patience = 5  # Early stopping patience
     patience_counter = 0
 
     for epoch in range(epoch_start, epoch_end + 1):
-        # Unfreeze encoder layers after 'freeze_epochs'
-        if epoch == freeze_epochs+1:
+        if epoch == freeze_epochs + 1:
             for param in model.encoder.parameters():
                 param.requires_grad = True
-            print(f"Unfroze encoder layers at start of epoch {epoch}")
+            print(f"Unfroze encoder at epoch {epoch}")
 
         # Training Phase
         model.train()
@@ -656,17 +794,23 @@ def training(model, epoch_start, epoch_end, loss_fn, train_loader, val_loader, n
 
         for images, masks in train_loader_tqdm:
             images, masks = images.to(device), masks.to(device)
+            masks = masks.argmax(dim=1)  # Convert one-hot to class indices
+            print(f"Image shape: {images.shape}, Mask shape: {masks.shape}")
 
             optimizer.zero_grad()
             with autocast(device_type=device_type):
                 outputs = model(images)
-                masks = masks.argmax(dim=1)  # Convert one-hot to class indices
-                loss = loss_fn(outputs, masks)
+                print(f"Output shape: {outputs.shape}, Mask shape: {masks.shape}")
+                loss_f = focal_loss(outputs, masks)
+                loss_d = dice_loss(outputs, masks)
+                loss = w_focal * loss_f + w_dice * loss_d
 
             scaler.scale(loss).backward()
             torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=1.0)  # Gradient clipping
             scaler.step(optimizer)
             scaler.update()
+
+            # scheduler.step()
 
             # Compute IoU metrics
             tp, fp, fn, tn = smp.metrics.get_stats(
@@ -684,7 +828,8 @@ def training(model, epoch_start, epoch_end, loss_fn, train_loader, val_loader, n
             avg_iou = train_iou / num_batches
             avg_f1 = train_f1 / num_batches
             
-            train_loader_tqdm.set_postfix(loss=avg_loss, iou=avg_iou, f1=avg_f1)
+            train_loader_tqdm.set_postfix(loss=avg_loss, iou=avg_iou, f1=avg_f1, lr=optimizer.param_groups[0]['lr'])
+
 
         # Log Training Metrics
         epoch_loss_train = train_loss / len(train_loader)
@@ -704,10 +849,13 @@ def training(model, epoch_start, epoch_end, loss_fn, train_loader, val_loader, n
         with torch.no_grad():
             for images, masks in val_loader_tqdm:
                 images, masks = images.to(device), masks.to(device)
+                masks = masks.argmax(dim=1)
+                
                 with autocast(device_type=device_type):
                     outputs = model(images)
-                    masks = masks.argmax(dim=1)
-                    loss = loss_fn(outputs, masks)
+                    loss_f = focal_loss(outputs, masks)
+                    loss_d = dice_loss(outputs, masks)
+                    loss = w_focal * loss_f + w_dice * loss_d
 
                 tp, fp, fn, tn = smp.metrics.get_stats(
                     outputs.argmax(dim=1).to(torch.int32), masks, mode="multiclass", num_classes=num_classes
@@ -724,7 +872,7 @@ def training(model, epoch_start, epoch_end, loss_fn, train_loader, val_loader, n
                 avg_iou = val_iou / num_batches
                 avg_f1 = val_f1 / num_batches
 
-                val_loader_tqdm.set_postfix(loss=avg_loss, iou=avg_iou, f1=avg_f1)
+                val_loader_tqdm.set_postfix(loss=avg_loss, iou=avg_iou, f1=avg_f1, lr=optimizer.param_groups[0]['lr'])
 
         # Log Validation Metrics
         epoch_loss_val = val_loss / len(val_loader)
@@ -735,12 +883,10 @@ def training(model, epoch_start, epoch_end, loss_fn, train_loader, val_loader, n
         writer.add_scalar('F1/val', epoch_f1_val, epoch)
         print(f"Epoch {epoch}, Val Loss: {epoch_loss_val:.4f}, IoU: {epoch_iou_val:.4f}, F1: {epoch_f1_val:.4f}")
 
-        # Reduce LR on plateau
+        # LR scheduler & early stopping
         scheduler.step(epoch_loss_val)
-
+        print(f" Learning rate after epoch {epoch}: {optimizer.param_groups[0]['lr']}")
         torch.save(model.state_dict(), f"../models/{model_name}_epoch_{epoch}.pth")
-
-        # Early Stopping Check
         if epoch_loss_val < best_val_loss:
             best_val_loss = epoch_loss_val
             patience_counter = 0
@@ -758,7 +904,7 @@ def training(model, epoch_start, epoch_end, loss_fn, train_loader, val_loader, n
 
     writer.flush()
     writer.close()
-
+    return model, optimizer
 
 def calculate_scores(model, test_loader, device, num_classes):
     model.eval()
@@ -804,6 +950,9 @@ def inference(img, model):
     Returns:
         torch.Tensor: Predicted mask tensor. shape: [height, width]
     """
+    # if image not type torch tensor
+    if not isinstance(img, torch.Tensor):	
+        img = torch.tensor(img, dtype=torch.float32).unsqueeze(0).to(device)  # Add batch dimension	
     img = img.to(device)
     model = model.to(device)
     model.eval()
