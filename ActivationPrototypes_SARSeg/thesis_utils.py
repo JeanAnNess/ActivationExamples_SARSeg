@@ -1357,8 +1357,8 @@ def find_n_similar_regions(query_activation, layer_name, train_image_keys, activ
                 # print("Warning: Activation map is smaller than query window.")
                 y_positions[-1] = H - win_h
 
-            # print("Debug: X Positions:", x_positions)
-            # print("Debug: Y Positions:", y_positions)
+            # print("Debug: X Positions:", [x*factor for x in x_positions])	
+            # print("Debug: Y Positions:", [y*factor for y in y_positions])	
 
             # Slide a window over the activation map
             for y in y_positions:
