@@ -428,7 +428,33 @@ def display_results(model, loader, lmdb_path, num_images=10, color_map=color_map
 
         plt.show()
 
-def display_good_bad(model, lmdb_path, ref_image, ref_reference, color_map = color_map, pixel_value_to_class_index = pixel_value_to_class_index, img_size = 128):
+def display_from_image_and_mask(image, mask, color_map=color_map):
+    """
+    Displays a visualization of the image and mask.
+
+    Args:
+        image (np.ndarray): The image to display.
+        mask (np.ndarray): The mask to display. Already in class indices.
+        color_map (Dict[int, List[int]]): A dictionary mapping class indices to RGB colors.
+    """
+    mask_colored = apply_color_map(mask, color_map)
+
+    # Create a figure with three subplots
+    fig, axes = plt.subplots(1, 2, figsize=(10, 5))
+
+    # Display the VH channel
+    axes[0].imshow(image[0], cmap='gray')
+    axes[0].set_title('VH Channel Visualization')
+    axes[0].axis('off')
+
+    # Display the mask
+    axes[1].imshow(mask_colored)
+    axes[1].set_title('Mask')
+    axes[1].axis('off')
+    plt.show()
+
+
+def display_good_bad(model, lmdb_path, ref_image, ref_reference, color_map = color_map, pixel_value_to_class_index = pixel_value_to_class_index, img_size = 120):
     """
     Displays a visualization of (handpicked) good and bad predictions of the model.
 
@@ -441,7 +467,7 @@ def display_good_bad(model, lmdb_path, ref_image, ref_reference, color_map = col
         pixel_value_to_class_index (Dict[int, int]): A dictionary mapping pixel values to class indices.
 
     """
-    
+        
     model.eval()
     env = lmdb.open(lmdb_path, readonly=True)
     
@@ -748,7 +774,9 @@ def training(model,
              lr=1e-4,
              model_name="unet120",
              freeze_epochs=2,
-             loss_weights=(1.0, 1.0)):
+             loss_weights=(1.0, 1.0),
+             save_dir = "../models/",
+             ignore_index=20):
     """
     Training loop with combined Focal + Dice loss, per-class IoU/F1 logging, and tqdm progress bars.
     """
@@ -758,8 +786,8 @@ def training(model,
     model.to(device)
 
     # Instantiate losses
-    focal_loss = FocalLoss(mode='multiclass', ignore_index=20)  
-    dice_loss = DiceLoss(mode='multiclass', ignore_index=20)  
+    focal_loss = FocalLoss(mode='multiclass', ignore_index=ignore_index)  
+    dice_loss = DiceLoss(mode='multiclass', ignore_index=ignore_index)  
     w_focal, w_dice = loss_weights
     
 
@@ -795,12 +823,12 @@ def training(model,
         for images, masks in train_loader_tqdm:
             images, masks = images.to(device), masks.to(device)
             masks = masks.argmax(dim=1)  # Convert one-hot to class indices
-            print(f"Image shape: {images.shape}, Mask shape: {masks.shape}")
+            # print(f"Image shape: {images.shape}, Mask shape: {masks.shape}")
 
             optimizer.zero_grad()
             with autocast(device_type=device_type):
                 outputs = model(images)
-                print(f"Output shape: {outputs.shape}, Mask shape: {masks.shape}")
+                #print(f"Output shape: {outputs.shape}, Mask shape: {masks.shape}")
                 loss_f = focal_loss(outputs, masks)
                 loss_d = dice_loss(outputs, masks)
                 loss = w_focal * loss_f + w_dice * loss_d
@@ -886,11 +914,11 @@ def training(model,
         # LR scheduler & early stopping
         scheduler.step(epoch_loss_val)
         print(f" Learning rate after epoch {epoch}: {optimizer.param_groups[0]['lr']}")
-        torch.save(model.state_dict(), f"../models/{model_name}_epoch_{epoch}.pth")
+        torch.save(model.state_dict(), f"{save_dir}/{model_name}_epoch_{epoch}.pth")
         if epoch_loss_val < best_val_loss:
             best_val_loss = epoch_loss_val
             patience_counter = 0
-            torch.save(model.state_dict(), f"../models/{model_name}_best.pth")  # Save best model
+            torch.save(model.state_dict(), f"{save_dir}/{model_name}_best.pth")  # Save best model
         else:
             patience_counter += 1
 
@@ -906,12 +934,12 @@ def training(model,
     writer.close()
     return model, optimizer
 
-def calculate_scores(model, test_loader, device, num_classes):
+def calculate_scores(model, test_loader, device, num_classes, ignore_index=20):
     model.eval()
     test_loss = 0.0
     test_iou = 0.0
     test_f1 = 0.0
-    criterion = FocalLoss(mode='multiclass', ignore_index=20)  
+    criterion = FocalLoss(mode='multiclass', ignore_index=ignore_index)  
 
     with torch.no_grad():
         for images, masks in tqdm(test_loader, desc="Calculating scores"):
