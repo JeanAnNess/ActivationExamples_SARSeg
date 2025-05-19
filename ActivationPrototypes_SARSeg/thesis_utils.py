@@ -1676,7 +1676,7 @@ def mask_to_pixel_classes(mask, pixel_value_to_class_index):
     return class_counts
 
 
-def show_overlap_matrix(data, targets, layer_names, mode = "overlap", title = None, save_plot = False):
+def show_overlap_matrix(data, targets, layer_names, mode = "overlap", title_in = None, save_plot = False):
     """
     Visualize the overlap matrix for different layers and targets.
 
@@ -1713,12 +1713,15 @@ def show_overlap_matrix(data, targets, layer_names, mode = "overlap", title = No
             for j in range(len(layer_names)):
                 ax.text(j, i, round(matrix[i, j],2), ha="center", va="center", color="black")
 
-        if title is None:
+        if title_in is None:
             if mode == "overlap":
+                print(f"Overlap Matrix - {target}")
                 title = f"Prototype Overlap Matrix - {target}"
             else:
                 (p1,p2) = data[(0,1)]['Prototype Overlap Top X with Top Y']
                 title = f"Top {p1} Prototype Overlap with Top {p2}"
+        else:
+            title = title_in
 
         # Set the ticks and labels
         ax.set_xticks(range(len(layer_names)))
