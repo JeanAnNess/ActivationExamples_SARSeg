@@ -1676,7 +1676,7 @@ def mask_to_pixel_classes(mask, pixel_value_to_class_index):
     return class_counts
 
 
-def show_overlap_matrix(data, targets, layer_names, mode = "overlap"):
+def show_overlap_matrix(data, targets, layer_names, mode = "overlap", title = None, save_plot = False):
     """
     Visualize the overlap matrix for different layers and targets.
 
@@ -1690,7 +1690,7 @@ def show_overlap_matrix(data, targets, layer_names, mode = "overlap"):
     if not isinstance(layer_names, list): layer_names = [layer_names]
     if not isinstance(targets, list): targets = [targets]
     
-    # Loop over all targets"
+    # Loop over all targets
     for target in targets:
         matrix = np.zeros((len(layer_names), len(layer_names)))
         for i in range(len(layer_names)):
@@ -1702,7 +1702,7 @@ def show_overlap_matrix(data, targets, layer_names, mode = "overlap"):
                     elif (j, i) in data.keys():
                         matrix[i,j] = data[(j, i)][target]
                     else:
-                        matrix[i,j] = 0 # usually when i = j
+                        matrix[i,j] = 0 # when i = j
                     
         # Convert the matrix to a DataFrame for better visualization
         fig, ax = plt.subplots(figsize=(8, 6))
@@ -1712,19 +1712,28 @@ def show_overlap_matrix(data, targets, layer_names, mode = "overlap"):
         for i in range(len(layer_names)):
             for j in range(len(layer_names)):
                 ax.text(j, i, round(matrix[i, j],2), ha="center", va="center", color="black")
-                
-        if mode == "overlap":
-            title = f"Overlap Matrix - {target}"
-        else:
-            (n1,n2) = data[(0,1)]['Overlap Top X with Top Y']
-            title = f"Top {n1} Overlap with Top {n2}"
+
+        if title is None:
+            if mode == "overlap":
+                title = f"Prototype Overlap Matrix - {target}"
+            else:
+                (p1,p2) = data[(0,1)]['Prototype Overlap Top X with Top Y']
+                title = f"Top {p1} Prototype Overlap with Top {p2}"
 
         # Set the ticks and labels
         ax.set_xticks(range(len(layer_names)))
         ax.set_yticks(range(len(layer_names)))
-        ax.set_xticklabels(layer_names, rotation=45)
+        ax.set_xticklabels(layer_names, rotation=30)
         ax.set_yticklabels(layer_names)
         plt.title(title)
         plt.xlabel("Other Layers")
         plt.ylabel("Current Layer")
+        fig.tight_layout()
+
+        if save_plot:
+            save_path = f"plots/overlaps_{target}"
+            fig.savefig(save_path, bbox_inches="tight")
+
         plt.show()
+
+            
