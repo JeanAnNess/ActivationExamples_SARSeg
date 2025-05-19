@@ -1726,8 +1726,8 @@ def show_overlap_matrix(data, targets, layer_names, mode = "overlap", title = No
         ax.set_xticklabels(layer_names, rotation=30)
         ax.set_yticklabels(layer_names)
         plt.title(title)
-        plt.xlabel("Other Layers")
-        plt.ylabel("Current Layer")
+        plt.xlabel("Second Layer")
+        plt.ylabel("First Layer")
         fig.tight_layout()
 
         if save_plot:
