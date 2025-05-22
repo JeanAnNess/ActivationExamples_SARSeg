@@ -1298,10 +1298,10 @@ def plot_similarities(query_image, query_predicted, similar_images, similar_mask
     # Display Top-5 Similar Images and Masks
     for i, (img, mask, title, draw_box) in enumerate(zip(similar_images, similar_masks, titles, draw_boxes), start=1):
         axes[0, i].imshow(img[0].cpu().numpy(), cmap='gray')
-        axes[0, i].set_title(f"Image {i}: {title}")
+        axes[0, i].set_title(f"Prototype {i}: {title}")
         axes[0, i].axis("off")
         axes[1, i].imshow(mask)  # Mask (HW)
-        axes[1, i].set_title(f"Mask {i}")
+        axes[1, i].set_title(f"Segmentation Mask {i}")
         axes[1, i].axis("off")
 
         # Draw the box if available
