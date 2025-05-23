@@ -500,17 +500,17 @@ def display_good_bad(model, lmdb_path, ref_image, ref_reference, color_map = col
 
         # Display the VH channel
         axes[0].imshow(image[0], cmap='gray')
-        axes[0].set_title('VH Channel Visualization')
+        axes[0].set_title(f"$\\bf{{VH\\ Channel}}$", fontsize=20)
         axes[0].axis('off')
 
         # Display the ground truth mask
         axes[1].imshow(real_mask_colored)
-        axes[1].set_title('Ground Truth Mask')
+        axes[1].set_title(f"$\\bf{{Original\\ Reference\\ Map}}$", fontsize=20)
         axes[1].axis('off')
 
         # Display the predicted mask
         axes[2].imshow(pred_mask_colored)
-        axes[2].set_title('Predicted Mask')
+        axes[2].set_title(f"$\\bf{{Predicted\\ Mask}}$", fontsize=20)
         axes[2].axis('off')
 
         plt.show()
