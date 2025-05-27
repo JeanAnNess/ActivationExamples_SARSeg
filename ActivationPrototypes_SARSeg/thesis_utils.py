@@ -19,6 +19,7 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 import torch.optim as optim
+from torch.utils.data import Dataset
 from torch.amp import GradScaler, autocast
 import segmentation_models_pytorch as smp
 from segmentation_models_pytorch import Unet
@@ -239,13 +240,6 @@ def get_image_and_mask_from_key(image_key, reference_key = None, lmdb_path=None)
 
     return image, mask
 
-def keys_from_match(idx, matches):
-    """
-    Get the image and reference map keys from the matches list based on the index.
-    """
-    image_key, reference_key = matches[idx]
-    return image_key, reference_key
-
 '''
 Mask Functions
 '''
@@ -283,80 +277,6 @@ def apply_color_map(mask, color_map = color_map):
     for class_index, color in color_map.items():
         mask_rgb[mask == class_index] = color
     return mask_rgb
-
-def display_results2(models, loader, lmdb_path, num_images=10, color_map=color_map, pixel_value_to_class_index=pixel_value_to_class_index, indices=None):
-    """
-    Displays n random masks from an image set with the ground truth and predicted masks from multiple models.
-
-    Args:
-        models (List[torch.nn.Module]): The list of models to use for inference.
-        loader (torch.utils.data.DataLoader): The data loader for the image set.
-        lmdb_path (str): Path to the LMDB database.
-        num_images (int): The number of images to display.
-        color_map (Dict[int, List[int]]): A dictionary mapping class indices to RGB colors.
-        pixel_value_to_class_index (Dict[int, int]): A dictionary mapping pixel values to class indices.
-        indices (List[int], optional): Specific indices to display. If None, random indices will be selected.
-    """
-    for model in models:
-        model.eval()
-    
-    env = lmdb.open(lmdb_path, readonly=True, lock=False)
-    
-    # Create a list of all indices in the test set
-    all_indices = list(range(len(loader.dataset)))
-    
-    if indices is None:
-        # Randomly sample indices
-        indices = random.sample(all_indices, num_images)
-    # print(indices)
-    
-    for idx in indices:
-        # Get the image and mask at the sampled index
-        image, mask = loader.dataset[idx]
-        mask = mask.argmax(dim=0).cpu().numpy()
-
-        # Get the corresponding real mask from the LMDB database
-        image_key, reference_key = loader.dataset.matches[idx]
-        with env.begin() as txn:
-            real_mask_data = load(txn.get(reference_key.encode()))
-        real_mask = real_mask_data["Data"]
-
-        # print(f"Image Key: {image_key}, Reference Key: {reference_key}")
-
-        # Predict the mask for each model
-        preds = [inference(image.unsqueeze(0).to(device), model) for model in models]
-        
-        real_mask_indices = replace_pixel_values_with_class_indices(real_mask, pixel_value_to_class_index)
-
-        real_mask_colored = apply_color_map(real_mask_indices, color_map)
-        pred_masks_colored = [apply_color_map(pred.squeeze(0).cpu(), color_map) for pred in preds]
-
-        # Create a figure with subplots for each model's prediction
-        fig, axes = plt.subplots(1, 3 + len(models), figsize=(5 * (3 + len(models)), 5))
-
-        # Display the VH channel
-        axes[0].imshow(image[0].cpu().numpy(), cmap='gray')
-        axes[0].set_title('VH Channel Visualization')
-        axes[0].axis('off')
-
-        # Display the VV channel
-        axes[1].imshow(image[1].cpu().numpy(), cmap='gray')
-        axes[1].set_title('VV Channel Visualization')
-        axes[1].axis('off')
-
-        # Display the ground truth mask
-        axes[2].imshow(real_mask_colored)
-        axes[2].set_title('Ground Truth Mask')
-        axes[2].axis('off')
-
-        # Display the predicted masks for each model
-        for i, pred_mask_colored in enumerate(pred_masks_colored):
-            axes[3 + i].imshow(pred_mask_colored)
-            axes[3 + i].set_title(f'Predicted Mask (Model {i+1})')
-            axes[3 + i].axis('off')
-
-        plt.show()
-
 
 def display_results(model, loader, lmdb_path, num_images=10, color_map=color_map, pixel_value_to_class_index=pixel_value_to_class_index, indices = None):
     """
@@ -518,8 +438,8 @@ def display_good_bad(model, lmdb_path, ref_image, ref_reference, color_map = col
 '''
 Model Creation and Loading Utilities
 '''
-def create_base_model(backbone ='resnet50', weights = None, in_channel = 2, num_classes = 20):
-    model = Unet(
+def create_base_model_skipconn(backbone ='resnet50', weights = None, in_channel = 2, num_classes = 20):
+    model = CustomUnetSkipConn(
         encoder_name= backbone,     # Pretrained encoder, adjust if necessary
         encoder_weights=weights,    # No ImageNet weights since SAR images are different
         in_channels=in_channel,     # Two bands (VH, VV)
@@ -528,15 +448,15 @@ def create_base_model(backbone ='resnet50', weights = None, in_channel = 2, num_
     )
     return model
 
-def load_from_checkpoint(checkpoint_path, num_classes= 20):
-    model = create_base_model(num_classes = num_classes)
+def load_from_checkpoint_skipconn(checkpoint_path, num_classes= 20):
+    model = create_base_model_skipconn(num_classes = num_classes)
     checkpoint = torch.load(checkpoint_path, weights_only=True)
     model.load_state_dict(torch.load(checkpoint_path, weights_only = True), strict=False)
     return model
 
-def load_base_with_bigearth_pretrained(num_classes= 20):
+def load_base_with_bigearth_pretrained_skipconn(num_classes= 20):
     # Load the pretrained model
-    model = create_base_model(num_classes = num_classes)
+    model = create_base_model_skipconn(num_classes = num_classes)
     model_bigearth_classifier = BigEarthNetv2_0_ImageClassifier.from_pretrained(
         "BIFOLD-BigEarthNetv2-0/resnet50-s1-v0.1.1"
     )
@@ -624,143 +544,6 @@ class CustomUnetSkipConn(smp.Unet):
         x = self.decoder(x, skip_connections)
         x = self.segmentation_head(x)
         return x
-
-
-def create_base_model_skipconn(backbone ='resnet50', weights = None, in_channel = 2, num_classes = 20):
-    model = CustomUnetSkipConn(
-        encoder_name= backbone,     # Pretrained encoder, adjust if necessary
-        encoder_weights=weights,    # No ImageNet weights since SAR images are different
-        in_channels=in_channel,     # Two bands (VH, VV)
-        classes=num_classes,        # Number of segmentation classes
-        activation="softmax",       # Output activation
-    )
-    return model
-
-def load_from_checkpoint_skipconn(checkpoint_path, num_classes= 20):
-    model = create_base_model_skipconn(num_classes = num_classes)
-    checkpoint = torch.load(checkpoint_path, weights_only=True)
-    model.load_state_dict(torch.load(checkpoint_path, weights_only = True), strict=False)
-    return model
-
-def load_base_with_bigearth_pretrained_skipconn(num_classes= 20):
-    # Load the pretrained model
-    model = create_base_model_skipconn(num_classes = num_classes)
-    model_bigearth_classifier = BigEarthNetv2_0_ImageClassifier.from_pretrained(
-        "BIFOLD-BigEarthNetv2-0/resnet50-s1-v0.1.1"
-    )
-    pretrained_weights = model_bigearth_classifier.state_dict()
-
-    # Create a mapping from the pretrained model keys to the untrained model keys
-    key_mapping = {
-        pretrained_key: pretrained_key.replace("model.vision_encoder", "encoder")
-        for pretrained_key in pretrained_weights.keys()
-        if pretrained_key.startswith("model.vision_encoder")
-    }
-
-    # Map weights to the untrained model
-    mapped_state_dict = {
-        untrained_key: pretrained_weights[pretrained_key]
-        for pretrained_key, untrained_key in key_mapping.items()
-    }
-    # Load the model
-    missing_keys, unexpected_keys = model.load_state_dict(mapped_state_dict, strict=False)
-    return model
-
-
-class CustomDecoder(nn.Module):
-    def __init__(self, in_channels, decoder_channels):
-        super().__init__()
-
-        # Define upsampling blocks with transposed convolution + ConvBlock
-        def up_block(in_ch, out_ch, scale_factor):
-            return nn.Sequential(
-                nn.Upsample(scale_factor=scale_factor, mode='bilinear', align_corners=True),
-                nn.Conv2d(in_ch, out_ch, kernel_size=3, padding=1),
-                nn.BatchNorm2d(out_ch), # FIXME: Anschauen, ob das ohne besser geht
-                nn.ReLU(inplace=True)
-            )
-
-        self.up1 = up_block(in_channels, decoder_channels[0], scale_factor=8/4)     # 4 → 8
-        self.up2 = up_block(decoder_channels[0], decoder_channels[1], scale_factor=15/8)            # 8 → 15
-        self.up3 = up_block(decoder_channels[1], decoder_channels[2], scale_factor=30/15)            # 15 → 30
-        self.up4 = up_block(decoder_channels[2], decoder_channels[3], scale_factor=60/30)             # 30 → 60
-        self.up5 = up_block(decoder_channels[3], decoder_channels[4], scale_factor=120/60)            # 60 → 120
-        
-    def forward(self, x):
-        x = self.up1(x)
-        x = self.up2(x)
-        x = self.up3(x)
-        x = self.up4(x)
-        x = self.up5(x)
-        return x
-
-class CustomUnet(smp.Unet):
-    def __init__(
-        self,
-        encoder_name: str = "resnet50",
-        encoder_weights = None,
-        decoder_channels = (256, 128, 64, 32, 16),
-        in_channels: int = 2,
-        classes: int = 20,
-        activation = "softmax",
-    ):
-        super().__init__(encoder_name=encoder_name, encoder_weights=encoder_weights, in_channels=in_channels, classes=classes, activation=activation)
-        
-        # Modify the decoder to have the desired upsampling stages
-        self.decoder = CustomDecoder(in_channels=self.encoder.out_channels[-1], decoder_channels=decoder_channels)
-        self.segmentation_head = SegmentationHead(
-            in_channels=decoder_channels[-1],
-            out_channels=classes,
-            activation=activation,
-            kernel_size=3,
-        )
-        print("CustomUnet initialized with encoder channels:", self.encoder.out_channels)
-
-    def forward(self, x):
-        features = self.encoder(x)
-        x = features[-1]
-        x = self.decoder(x)
-        x = self.segmentation_head(x)
-        return x
-
-def create_base_model120(backbone='resnet50', weights=None, in_channels=2, num_classes=20):
-    model = CustomUnet(
-        encoder_name=backbone,     # Pretrained encoder, adjust if necessary
-        encoder_weights=weights,   # No ImageNet weights since SAR images are different
-        in_channels=in_channels,   # Two bands (VH, VV)
-        classes=num_classes,       # Number of segmentation classes
-    )
-    return model
-
-def load_from_checkpoint120(checkpoint_path):
-    model = create_base_model120()
-    checkpoint = torch.load(checkpoint_path, weights_only=True)
-    model.load_state_dict(torch.load(checkpoint_path, weights_only = True), strict=False)
-    return model
-
-def load_base_with_bigearth_pretrained120():
-    # Load the pretrained model
-    model = create_base_model120()
-    model_bigearth_classifier = BigEarthNetv2_0_ImageClassifier.from_pretrained(
-        "BIFOLD-BigEarthNetv2-0/resnet50-s1-v0.1.1"
-    )
-    pretrained_weights = model_bigearth_classifier.state_dict()
-
-    # Create a mapping from the pretrained model keys to the untrained model keys
-    key_mapping = {
-        pretrained_key: pretrained_key.replace("model.vision_encoder", "encoder")
-        for pretrained_key in pretrained_weights.keys()
-        if pretrained_key.startswith("model.vision_encoder")
-    }
-
-    # Map weights to the untrained model
-    mapped_state_dict = {
-        untrained_key: pretrained_weights[pretrained_key]
-        for pretrained_key, untrained_key in key_mapping.items()
-    }
-    # Load the model
-    missing_keys, unexpected_keys = model.load_state_dict(mapped_state_dict, strict=False)
-    return model
 
 '''
 Training and Inference Utilities
@@ -970,13 +753,6 @@ def calculate_scores(model, test_loader, device, num_classes, ignore_index=20):
 def inference(img, model):
     """
     Perform inference on a single image.
-
-    Args:
-        img (torch.Tensor): Input image tensor.  shape: [2, height, width]
-        model (torch.nn.Module): Trained model.
-
-    Returns:
-        torch.Tensor: Predicted mask tensor. shape: [height, width]
     """
     # if image not type torch tensor
     if not isinstance(img, torch.Tensor):	
@@ -992,88 +768,6 @@ def inference(img, model):
 '''
 Dataset and DataLoader Utilities
 '''
-from torch.utils.data import Dataset
-class SARSegmentationDataset(Dataset):
-    def __init__(self, lmdb_path, matches, num_classes=20, target_height=128, target_width=128, transform=None):
-        self.image_lmdb_file = lmdb_path
-        self.env = None
-        self.matches = matches
-        self.num_classes = num_classes
-        self.target_height = target_height
-        self.target_width = target_width
-        self.transform = transform
-        self.open_env()
-
-    def open_env(self):
-        if self.env is None:
-            print("Opening LMDB environment ...")
-            self.env = lmdb.open(
-                str(self.image_lmdb_file),
-                readonly=True,
-                lock=False,
-                meminit=False,
-                readahead=True,
-                map_size=8 * 1024**3,   # 8GB blocked for caching
-                max_spare_txns=16,      # expected number of concurrent transactions (e.g. threads/workers)
-            )
-
-    def __len__(self):
-        return len(self.matches)
-
-    def pad_image(self, img_tensor):
-        if img_tensor.ndim == 2:  # If the tensor has only two dimensions (H, W)
-            img_tensor = img_tensor.unsqueeze(0)  # Add a channel dimension (1, H, W)
-        _, h, w = img_tensor.shape
-        pad_h = self.target_height - h
-        pad_w = self.target_width - w
-        padding = (0, pad_w, 0, pad_h)  # (left, right, top, bottom)
-        padded_img = F.pad(img_tensor, padding, mode='constant', value=0)
-        return padded_img
-
-    def __getitem__(self, idx):
-        self.open_env()
-        image_key, reference_key = self.matches[idx]
-
-        # Retrieve data from LMDB
-        with self.env.begin() as txn:
-            # Load image data
-            image_data = load(txn.get(image_key.encode()))
-            image_bands = ["VH", "VV"]  # Sentinel 1 bands
-            image_tensor = np.stack([image_data[band] for band in image_bands])
-            
-            # Load reference map
-            mask_data = load(txn.get(reference_key.encode()))
-
-        mask_data = mask_data["Data"]
-        # Replace pixel values with class indices
-        mask_indices = replace_pixel_values_with_class_indices(mask_data, pixel_value_to_class_index)
-
-        # Ensure all class indices are within the valid range
-        mask_indices = np.clip(mask_indices, 1, self.num_classes-1)
-
-        # One-hot encode the class indices
-        mask_indices_one_hot = F.one_hot(torch.tensor(mask_indices).long(), num_classes=self.num_classes).permute(2, 0, 1).float() # (H, W, C) -> (C, H, W)
-
-        # Pad image and mask
-        image_tensor = self.pad_image(torch.tensor(image_tensor, dtype=torch.float32))
-        mask_indices_one_hot = self.pad_image(mask_indices_one_hot)
-
-        # Convert tensors to numpy arrays for albumentations
-        image_tensor_np = image_tensor.numpy()
-        mask_indices_one_hot_np = mask_indices_one_hot.numpy()
-
-        # Apply transformations if provided
-        if self.transform:
-            augmented = self.transform(image=image_tensor_np, mask=mask_indices_one_hot_np)
-            image_tensor_np = augmented['image']
-            mask_indices_one_hot_np = augmented['mask']
-
-        # Convert back to tensors
-        image_tensor = torch.tensor(image_tensor_np, dtype=torch.float32)
-        mask_indices_one_hot = torch.tensor(mask_indices_one_hot_np, dtype=torch.long)
-
-        return image_tensor, mask_indices_one_hot
-
 class SARSegmentationDataset120(Dataset):
     def __init__(self, lmdb_path, matches, num_classes=20, transform=None):
         self.image_lmdb_file = lmdb_path
@@ -1135,9 +829,6 @@ class SARSegmentationDataset120(Dataset):
 
         return image_tensor, mask_indices_one_hot
 
-'''
-Experiment Utilities
-'''
 
 '''
 Activation LMDB Utilities
@@ -1261,7 +952,6 @@ def setup_hooks(model, activations_dict):
 '''
 Similarity Utilities
 '''
-
 def compute_similarity(query_activation_flat, candidate_activation_flat, metric='cosine'):
     """Compute similarity efficiently using pre-flattened tensors."""
     return F.cosine_similarity(query_activation_flat, candidate_activation_flat, dim=1).item() if metric == 'cosine' else -torch.norm(query_activation_flat - candidate_activation_flat, dim=1).item()
@@ -1524,14 +1214,6 @@ def get_pairwise_overlap(list_of_lists, layer_names, eta = 0.85):
     top_10_sets = [get_top_subset(layer, 10) for layer in list_of_lists]
     top_20_sets = [get_top_subset(layer, 20) for layer in list_of_lists]
     top_50_sets = [get_top_subset(layer, 50) for layer in list_of_lists]
-    
-    
-    #for i in range(n):
-    #    print(f"Top {top_n} for layer {i}: {top_n_sets[i]}")
-    
-
-    #for i in range(n):
-    #    print(f"Top {top_n} for layer {i}: {top_n_sets[i]}")
     
     # Compare each pair (i, j)
     for i in range(n):
