@@ -8,9 +8,11 @@ The project implements a framework utilizing prototypes and retrieving highest t
 
 ```
 ActivationPrototypes-SARSeg/
-├── LICENSE            
-├── README.md      
-├── data
+└── ActivationPrototypes-SARSeg 
+│   ├── __init__.py            
+│   └── thesis_utils  
+│  
+├── data                            <- Will have to be created and populated by you
 │   └── BigEarthNet
 │       ├── Encoded-BigEarthNet     <- LMDB created via rico-hdl
 │       ├── prototypes              <- generated in `generating_prototypes` 
@@ -27,15 +29,16 @@ ActivationPrototypes-SARSeg/
 │   ├── qualitative_analysis
 │   ├── quantitative_analysis
 │   ├── noisy_results.csv           <- Results for `Continuity` Experiment
-│   └── runtime       
+│   └── runtime 
+│      
+├── LICENSE
+│
+├── README.md 
 │                        
 ├── pyproject.toml    
 │                      
-├── requirements.txt   
-│
-└── ActivationPrototypes-SARSeg 
-    ├── __init__.py            
-    └── thesis_utils               
+└── requirements.txt   
+           
 ```
 
 ## References
