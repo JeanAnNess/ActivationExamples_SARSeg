@@ -1,11 +1,11 @@
-'''
-Utilities for SAR image segmentation
+"""
+Utilities for Activation-Based Prototype Extraction and Visualization
 Authored by Janes Sanne
-'''
+"""
 
-'''
+"""
 Imports
-'''
+"""
 # Standard Libraries
 import random
 
@@ -41,9 +41,9 @@ from tqdm import tqdm
 # Tensorboard
 from torch.utils.tensorboard import SummaryWriter
 
-''' 
-Basic Parameters
-'''
+""" 
+General Parameters
+"""
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
 color_map = {
@@ -103,7 +103,7 @@ class_name_to_index = {
     "Unlabeled": 20,
 }
 
-# According to https://bigearth.net/static/documents/Description_BigEarthNet_v2.pdf we can match pixel values to classes
+# According to https://bigearth.net/static/documents/Description_BigEarthNet_v2.pdf match pixel values to classes
 pixel_value_to_class_name = {
     111: "Urban fabric",
     112: "Urban fabric",
@@ -155,26 +155,26 @@ pixel_value_to_class_name = {
 pixel_value_to_class_index = {111: 1, 112: 1, 121: 2, 122: 20, 123: 20, 124: 20, 131: 20, 132: 20, 133: 20, 141: 20, 142: 20, 211: 3, 212: 3, 213: 3, 221: 4, 222: 4, 223: 4, 231: 5, 241: 4, 242: 6, 243: 7, 244: 8, 311: 9, 312: 10, 313: 11, 321: 12, 322: 13, 323: 13, 324: 14, 331: 15, 332: 20, 333: 12, 334: 20, 335: 20, 411: 16, 412: 16, 421: 17, 422: 17, 423: 20, 511: 18, 512: 18, 521: 19, 522: 19, 523: 19, 999: 20}
 
 LAYER_SHAPES = {
-    'encoder.layer1': (1, 256, 30, 30),
-    'encoder.layer2': (1, 512, 15, 15),
-    'encoder.layer3': (1, 1024, 8, 8),
-    'encoder.layer4': (1, 2048, 4, 4),
-    'decoder.up1': (1, 256, 8, 8),
-    'decoder.up2': (1, 128, 15, 15),
-    'decoder.up3': (1, 64, 30, 30),
-    'decoder.up4': (1, 32, 60, 60),
-    'decoder.up5': (1, 16, 120, 120),
+    "encoder.layer1": (1, 256, 30, 30),
+    "encoder.layer2": (1, 512, 15, 15),
+    "encoder.layer3": (1, 1024, 8, 8),
+    "encoder.layer4": (1, 2048, 4, 4),
+    "decoder.up1": (1, 256, 8, 8),
+    "decoder.up2": (1, 128, 15, 15),
+    "decoder.up3": (1, 64, 30, 30),
+    "decoder.up4": (1, 32, 60, 60),
+    "decoder.up5": (1, 16, 120, 120),
 }
 
 SCALE_FACTORS = {
-    'encoder.layer1': 4, 'encoder.layer2': 8, 'encoder.layer3': 15, 'encoder.layer4': 30,
-    'decoder.up1': 15, 'decoder.up2': 8, 'decoder.up3': 4, 'decoder.up4': 2, 'decoder.up5': 1
+    "encoder.layer1": 4, "encoder.layer2": 8, "encoder.layer3": 15, "encoder.layer4": 30,
+    "decoder.up1": 15, "decoder.up2": 8, "decoder.up3": 4, "decoder.up4": 2, "decoder.up5": 1
 }
 
 
-'''
+"""
 LMDB related utilities
-'''
+"""
 def match_keys(parquet_path):
     """
     Matches image keys with their corresponding reference map keys.
@@ -190,13 +190,13 @@ def match_keys(parquet_path):
     df = pd.read_parquet(parquet_path)
 
     # New column for the reference map key
-    df['reference_map'] = df['patch_id'].apply(lambda x: x + '_reference_map')
-    df = df[['s1_name', 'reference_map', 'split']]
+    df["reference_map"] = df["patch_id"].apply(lambda x: x + "_reference_map")
+    df = df[["s1_name", "reference_map", "split"]]
 
-    # Split the data into train, validation, and test sets according to the 'split' column
-    train = df[df['split'] == 'train']
-    validation = df[df['split'] == 'validation']
-    test = df[df['split'] == 'test']
+    # Split the data into train, validation, and test sets according to the "split" column
+    train = df[df["split"] == "train"]
+    validation = df[df["split"] == "validation"]
+    test = df[df["split"] == "test"]
 
     # Create lists of (image_key, reference_key) pairs
     matches_train = []
@@ -204,13 +204,13 @@ def match_keys(parquet_path):
     matches_test = []
 
     for index, row in train.iterrows():
-        matches_train.append((row['s1_name'], row['reference_map']))
+        matches_train.append((row["s1_name"], row["reference_map"]))
 
     for index, row in validation.iterrows():
-        matches_validation.append((row['s1_name'], row['reference_map']))
+        matches_validation.append((row["s1_name"], row["reference_map"]))
 
     for index, row in test.iterrows():
-        matches_test.append((row['s1_name'], row['reference_map']))
+        matches_test.append((row["s1_name"], row["reference_map"]))
 
     return matches_train, matches_validation, matches_test
 
@@ -240,9 +240,9 @@ def get_image_and_mask_from_key(image_key, reference_key = None, lmdb_path=None)
 
     return image, mask
 
-'''
+"""
 Mask Functions
-'''
+"""
 
 # Function to replace pixel values with class indices
 def replace_pixel_values_with_class_indices(mask, pixel_value_to_class_index = pixel_value_to_class_index):
@@ -257,96 +257,19 @@ def replace_pixel_values_with_class_indices(mask, pixel_value_to_class_index = p
 
     return class_indices_mask
 
-'''
+"""
 Visualization Functions
-'''
+"""
 
 def apply_color_map(mask, color_map = color_map):
     """
     Apply a color map to a mask.
-
-    Args:
-        mask (np.ndarray): The mask to apply the color map to.
-        color_map (Dict[int, List[int]]): A dictionary mapping class indices to RGB colors.
-
-    Returns:
-        np.ndarray: The mask with the color map applied.
     """
     h, w = mask.shape
     mask_rgb = np.zeros((h, w, 3), dtype=np.uint8)
     for class_index, color in color_map.items():
         mask_rgb[mask == class_index] = color
     return mask_rgb
-
-def display_results(model, loader, lmdb_path, num_images=10, color_map=color_map, pixel_value_to_class_index=pixel_value_to_class_index, indices = None):
-    """
-    Displays n random masks from an image set with the ground truth and predicted masks.
-
-    Args:
-        model (torch.nn.Module): The model to use for inference.
-        loader (torch.utils.data.DataLoader): The data loader for the image set.
-        lmdb_path (str): Path to the LMDB database.
-        num_images (int): The number of images to display.
-        color_map (Dict[int, List[int]]): A dictionary mapping class indices to RGB colors.
-        pixel_value_to_class_index (Dict[int, int]): A dictionary mapping pixel values to class
-
-    """
-    model.eval()
-    env = lmdb.open(lmdb_path, readonly=True, lock = False)
-    
-    # Create a list of all indices in the test set
-    all_indices = list(range(len(loader.dataset)))
-    
-    if indices is None:
-    # Randomly sample indices
-        indices = random.sample(all_indices, num_images)
-    print(indices)
-    
-    for idx in indices:
-        # Get the image and mask at the sampled index
-        image, mask = loader.dataset[idx]
-        mask = mask.argmax(dim=0).cpu().numpy()
-
-        # Get the corresponding real mask from the LMDB database
-        image_key, reference_key = loader.dataset.matches[idx]
-        with env.begin() as txn:
-            real_mask_data = load(txn.get(reference_key.encode()))
-        real_mask = real_mask_data["Data"]
-
-        print(f"Image Key: {image_key}, Reference Key: {reference_key}")
-
-        # Predict the mask
-        pred = inference(image.unsqueeze(0).to(device), model)
-        
-        real_mask_indices = replace_pixel_values_with_class_indices(real_mask, pixel_value_to_class_index)
-
-        real_mask_colored = apply_color_map(real_mask_indices, color_map)
-        pred_mask_colored = apply_color_map(pred.squeeze(0).cpu(), color_map)
-
-        # Create a figure with four subplots
-        fig, axes = plt.subplots(1, 4, figsize=(20, 5))
-
-        # Display the VH channel
-        axes[0].imshow(image[0].cpu().numpy(), cmap='gray')
-        axes[0].set_title('VH Channel Visualization')
-        axes[0].axis('off')
-
-        # Display the VV channel
-        axes[1].imshow(image[1].cpu().numpy(), cmap='gray')
-        axes[1].set_title('VV Channel Visualization')
-        axes[1].axis('off')
-
-        # Display the ground truth mask
-        axes[2].imshow(real_mask_colored)
-        axes[2].set_title('Ground Truth Mask')
-        axes[2].axis('off')
-
-        # Display the predicted mask
-        axes[3].imshow(pred_mask_colored)
-        axes[3].set_title('Predicted Mask')
-        axes[3].axis('off')
-
-        plt.show()
 
 def display_from_image_and_mask(image, mask, color_map=color_map):
     """
@@ -363,18 +286,18 @@ def display_from_image_and_mask(image, mask, color_map=color_map):
     fig, axes = plt.subplots(1, 2, figsize=(10, 5))
 
     # Display the VH channel
-    axes[0].imshow(image[0], cmap='gray')
-    axes[0].set_title('VH Channel Visualization')
-    axes[0].axis('off')
+    axes[0].imshow(image[0], cmap="gray")
+    axes[0].set_title("VH Channel Visualization")
+    axes[0].axis("off")
 
     # Display the mask
     axes[1].imshow(mask_colored)
-    axes[1].set_title('Mask')
-    axes[1].axis('off')
+    axes[1].set_title("Mask")
+    axes[1].axis("off")
     plt.show()
 
 
-def display_good_bad(model, lmdb_path, ref_image, ref_reference, color_map = color_map, pixel_value_to_class_index = pixel_value_to_class_index, img_size = 120):
+def display_image_reference_inference(model, lmdb_path, ref_image, ref_reference, color_map = color_map, pixel_value_to_class_index = pixel_value_to_class_index, img_size = 120):
     """
     Displays a visualization of (handpicked) good and bad predictions of the model.
 
@@ -415,36 +338,35 @@ def display_good_bad(model, lmdb_path, ref_image, ref_reference, color_map = col
         real_mask_indices = replace_pixel_values_with_class_indices(real_mask, pixel_value_to_class_index)
         real_mask_colored = apply_color_map(real_mask_indices, color_map)
 
-        # Create a figure with three subplots
         fig, axes = plt.subplots(1, 3, figsize=(20, 5))
 
         # Display the VH channel
-        axes[0].imshow(image[0], cmap='gray')
+        axes[0].imshow(image[0], cmap="gray")
         axes[0].set_title(f"$\\bf{{VH\\ Channel}}$", fontsize=20)
-        axes[0].axis('off')
+        axes[0].axis("off")
 
-        # Display the ground truth mask
+        # Display the reference map
         axes[1].imshow(real_mask_colored)
         axes[1].set_title(f"$\\bf{{Original\\ Reference\\ Map}}$", fontsize=20)
-        axes[1].axis('off')
+        axes[1].axis("off")
 
         # Display the predicted mask
         axes[2].imshow(pred_mask_colored)
         axes[2].set_title(f"$\\bf{{Predicted\\ Mask}}$", fontsize=20)
-        axes[2].axis('off')
+        axes[2].axis("off")
 
         plt.show()
 
-'''
-Model Creation and Loading Utilities
-'''
-def create_base_model_skipconn(backbone ='resnet50', weights = None, in_channel = 2, num_classes = 20):
+"""
+Model Factories
+"""
+def create_base_model_skipconn(backbone ="resnet50", weights = None, in_channel = 2, num_classes = 20):
     model = CustomUnetSkipConn(
-        encoder_name= backbone,     # Pretrained encoder, adjust if necessary
-        encoder_weights=weights,    # No ImageNet weights since SAR images are different
-        in_channels=in_channel,     # Two bands (VH, VV)
-        classes=num_classes,        # Number of segmentation classes
-        activation="softmax",       # Output activation
+        encoder_name= backbone,   
+        encoder_weights=weights,   
+        in_channels=in_channel,    
+        classes=num_classes,        
+        activation="softmax",      
     )
     return model
 
@@ -455,40 +377,40 @@ def load_from_checkpoint_skipconn(checkpoint_path, num_classes= 20):
     return model
 
 def load_base_with_bigearth_pretrained_skipconn(num_classes= 20):
-    # Load the pretrained model
+    # Pretrained model
     model = create_base_model_skipconn(num_classes = num_classes)
     model_bigearth_classifier = BigEarthNetv2_0_ImageClassifier.from_pretrained(
         "BIFOLD-BigEarthNetv2-0/resnet50-s1-v0.1.1"
     )
     pretrained_weights = model_bigearth_classifier.state_dict()
 
-    # Create a mapping from the pretrained model keys to the untrained model keys
+    # Mapping from the pretrained to untrained model
     key_mapping = {
         pretrained_key: pretrained_key.replace("model.vision_encoder", "encoder")
         for pretrained_key in pretrained_weights.keys()
         if pretrained_key.startswith("model.vision_encoder")
     }
 
-    # Map weights to the untrained model
+    # Map weights
     mapped_state_dict = {
         untrained_key: pretrained_weights[pretrained_key]
         for pretrained_key, untrained_key in key_mapping.items()
     }
-    # Load the model
+    # Load model
     missing_keys, unexpected_keys = model.load_state_dict(mapped_state_dict, strict=False)
     return model
 
-'''
-120x120 Model
-'''
+"""
+U-Net
+"""
 class CustomDecoderSkipConn(nn.Module):
     def __init__(self, in_channels, decoder_channels):
         super().__init__()
 
-        # Define upsampling blocks with transposed convolution + ConvBlock
+        # Upsampling blocks with transposed convolution + ConvBlock
         def up_block(in_ch, out_ch, scale_factor):
             return nn.Sequential(
-                nn.Upsample(scale_factor=scale_factor, mode='bilinear', align_corners=True),
+                nn.Upsample(scale_factor=scale_factor, mode="bilinear", align_corners=True),
                 nn.Conv2d(in_ch, out_ch, kernel_size=3, padding=1),
                 nn.BatchNorm2d(out_ch),
                 nn.ReLU(inplace=True)
@@ -536,18 +458,18 @@ class CustomUnetSkipConn(smp.Unet):
         print("CustomUnet initialized with encoder channels:", self.encoder.out_channels)
 
     def forward(self, x):
-        features = self.encoder(x)  # Get encoder features
+        features = self.encoder(x)  # encoder features
         x = features[-1]  # Last encoder layer
         skip_connections = features[:-1] 
 
-        # Pass the feature map through the decoder and add skip connections
+        # Pass feature map
         x = self.decoder(x, skip_connections)
         x = self.segmentation_head(x)
         return x
 
-'''
+"""
 Training and Inference Utilities
-'''
+"""
 def training(model,
              epoch_start,
              epoch_end,
@@ -561,7 +483,7 @@ def training(model,
              save_dir = "../models/",
              ignore_index=20):
     """
-    Training loop with combined Focal + Dice loss, per-class IoU/F1 logging, and tqdm progress bars.
+    Training loop with combined Focal + Dice loss, per-class IoU/F1 logging, and tqdm progress.
     """
     writer = SummaryWriter()
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
@@ -569,25 +491,17 @@ def training(model,
     model.to(device)
 
     # Instantiate losses
-    focal_loss = FocalLoss(mode='multiclass', ignore_index=ignore_index)  
-    dice_loss = DiceLoss(mode='multiclass', ignore_index=ignore_index)  
+    focal_loss = FocalLoss(mode="multiclass", ignore_index=ignore_index)  
+    dice_loss = DiceLoss(mode="multiclass", ignore_index=ignore_index)  
     w_focal, w_dice = loss_weights
     
 
     # Optimizer & Scheduler
     optimizer = optim.AdamW(model.parameters(), lr=lr, weight_decay=1e-4)
     scheduler = optim.lr_scheduler.ReduceLROnPlateau(optimizer, mode="min", factor=0.5, patience=2)
-    # total_steps = (epoch_end - epoch_start + 1) * len(train_loader)
-    # scheduler = optim.lr_scheduler.OneCycleLR(optimizer,
-    #                        max_lr=lr * 10,
-    #                        total_steps=total_steps,
-    #                        pct_start=0.3,
-    #                        anneal_strategy='cos',
-    #                        cycle_momentum=False)
 
-    # print(f"Num epochs: {epoch_end - epoch_start + 1}, Num batches: {len(train_loader)}, Total steps: {total_steps}")
     scaler = GradScaler()  # Mixed precision
-    best_val_loss = float('inf')
+    best_val_loss = float("inf")
     patience = 5  # Early stopping patience
     patience_counter = 0
 
@@ -597,7 +511,7 @@ def training(model,
                 param.requires_grad = True
             print(f"Unfroze encoder at epoch {epoch}")
 
-        # Training Phase
+        # Training
         model.train()
         train_loss, train_iou, train_f1 = 0.0, 0.0, 0.0
         train_loader_tqdm = tqdm(train_loader, desc=f"Epoch {epoch}/{epoch_end}", unit="batch")
@@ -621,8 +535,6 @@ def training(model,
             scaler.step(optimizer)
             scaler.update()
 
-            # scheduler.step()
-
             # Compute IoU metrics
             tp, fp, fn, tn = smp.metrics.get_stats(
                 outputs.argmax(dim=1).to(torch.int32), masks, mode="multiclass", num_classes=num_classes
@@ -639,19 +551,19 @@ def training(model,
             avg_iou = train_iou / num_batches
             avg_f1 = train_f1 / num_batches
             
-            train_loader_tqdm.set_postfix(loss=avg_loss, iou=avg_iou, f1=avg_f1, lr=optimizer.param_groups[0]['lr'])
+            train_loader_tqdm.set_postfix(loss=avg_loss, iou=avg_iou, f1=avg_f1, lr=optimizer.param_groups[0]["lr"])
 
 
-        # Log Training Metrics
+        # Log Training
         epoch_loss_train = train_loss / len(train_loader)
         epoch_iou_train = train_iou / len(train_loader)
         epoch_f1_train = train_f1 / len(train_loader)
-        writer.add_scalar('Loss/train', epoch_loss_train, epoch)
-        writer.add_scalar('IoU/train', epoch_iou_train, epoch)
-        writer.add_scalar('F1/train', epoch_f1_train, epoch)
+        writer.add_scalar("Loss/train", epoch_loss_train, epoch)
+        writer.add_scalar("IoU/train", epoch_iou_train, epoch)
+        writer.add_scalar("F1/train", epoch_f1_train, epoch)
         print(f"Epoch {epoch}, Train Loss: {epoch_loss_train:.4f}, IoU: {epoch_iou_train:.4f}, F1: {epoch_f1_train:.4f}")
 
-        # Validation Phase
+        # Validation
         model.eval()
         val_loss, val_iou, val_f1 = 0.0, 0.0, 0.0
         val_loader_tqdm = tqdm(val_loader, desc="Validation", unit="batch")
@@ -683,15 +595,15 @@ def training(model,
                 avg_iou = val_iou / num_batches
                 avg_f1 = val_f1 / num_batches
 
-                val_loader_tqdm.set_postfix(loss=avg_loss, iou=avg_iou, f1=avg_f1, lr=optimizer.param_groups[0]['lr'])
+                val_loader_tqdm.set_postfix(loss=avg_loss, iou=avg_iou, f1=avg_f1, lr=optimizer.param_groups[0]["lr"])
 
-        # Log Validation Metrics
+        # Log Validation
         epoch_loss_val = val_loss / len(val_loader)
         epoch_iou_val = val_iou / len(val_loader)
         epoch_f1_val = val_f1 / len(val_loader)
-        writer.add_scalar('Loss/val', epoch_loss_val, epoch)
-        writer.add_scalar('IoU/val', epoch_iou_val, epoch)
-        writer.add_scalar('F1/val', epoch_f1_val, epoch)
+        writer.add_scalar("Loss/val", epoch_loss_val, epoch)
+        writer.add_scalar("IoU/val", epoch_iou_val, epoch)
+        writer.add_scalar("F1/val", epoch_f1_val, epoch)
         print(f"Epoch {epoch}, Val Loss: {epoch_loss_val:.4f}, IoU: {epoch_iou_val:.4f}, F1: {epoch_f1_val:.4f}")
 
         # LR scheduler & early stopping
@@ -709,8 +621,8 @@ def training(model,
             print("Early stopping triggered!")
             break
 
-    # Print the last used learning rate
-    last_lr = optimizer.param_groups[0]['lr']
+    # Print last used learning rate
+    last_lr = optimizer.param_groups[0]["lr"]
     print(f"Last used learning rate: {last_lr}")
 
     writer.flush()
@@ -718,11 +630,14 @@ def training(model,
     return model, optimizer
 
 def calculate_scores(model, test_loader, device, num_classes, ignore_index=20):
+    """
+    Perform evaluation on a given test set and calculate loss, IoU, and F1 score.
+    """
     model.eval()
     test_loss = 0.0
     test_iou = 0.0
     test_f1 = 0.0
-    criterion = FocalLoss(mode='multiclass', ignore_index=ignore_index)  
+    criterion = FocalLoss(mode="multiclass", ignore_index=ignore_index)  
 
     with torch.no_grad():
         for images, masks in tqdm(test_loader, desc="Calculating scores"):
@@ -765,9 +680,9 @@ def inference(img, model):
         pred = output.argmax(dim=1)
     return pred
 
-'''
+"""
 Dataset and DataLoader Utilities
-'''
+"""
 class SARSegmentationDataset120(Dataset):
     def __init__(self, lmdb_path, matches, num_classes=20, transform=None):
         self.image_lmdb_file = lmdb_path
@@ -787,7 +702,7 @@ class SARSegmentationDataset120(Dataset):
                 meminit=False,
                 readahead=True,
                 map_size=8 * 1024**3,   # 8GB blocked for caching
-                max_spare_txns=16,      # expected number of concurrent transactions (e.g. threads/workers)
+                max_spare_txns=16,     
             )
 
     def __len__(self):
@@ -808,58 +723,55 @@ class SARSegmentationDataset120(Dataset):
             mask_data = load(txn.get(reference_key.encode()))
 
         mask_data = mask_data["Data"]
-        # Replace pixel values with class indices
         mask_indices = replace_pixel_values_with_class_indices(mask_data, pixel_value_to_class_index)
 
-        # Ensure all class indices are within the valid range
+        # Ensure valid range
         mask_indices = np.clip(mask_indices, 1, self.num_classes-1)
-
-        # One-hot encode the class indices
         mask_indices_one_hot = F.one_hot(torch.tensor(mask_indices).long(), num_classes=self.num_classes).permute(2, 0, 1).float().numpy() # (H, W, C) -> (C, H, W)
 
-        # Apply transformations if provided
+        # Apply transformations
         if self.transform:
             augmented = self.transform(image=image_tensor, mask=mask_indices_one_hot)
-            image_tensor = augmented['image']
-            mask_indices_one_hot = augmented['mask']
+            image_tensor = augmented["image"]
+            mask_indices_one_hot = augmented["mask"]
 
-        # Convert back to tensors
+        # Convert to tensors
         image_tensor = torch.tensor(image_tensor, dtype=torch.float32)
         mask_indices_one_hot = torch.tensor(mask_indices_one_hot, dtype=torch.long)
 
         return image_tensor, mask_indices_one_hot
 
 
-'''
+"""
 Activation LMDB Utilities
-'''
+"""
 
-def store_activations(matches, model, lmdb_path, source_lmdb_path, layer_names, break_flag):
+def store_activations(matches, model, lmdb_path, source_lmdb_path, layer_names, break_flag, map_size=2*10**10):
+    """
+    Store activations from the model into an LMDB database.
+    """
     print("Storing activations in LMDB at path:", lmdb_path)
 
-    # Create LMDB environment
-    env = lmdb.open(lmdb_path, map_size=2*10**10)
+    # Create LMDB env
+    env = lmdb.open(lmdb_path, map_size=map_size)
     source_env = lmdb.open(source_lmdb_path, readonly=True)
 
-    # Register hooks to capture activations
     activations = {}
     setup_hooks(model, activations)
 
-    # Iterate over the matches and store activations    
+    # Iterate over matches and store activations    
     for idx, match in tqdm(enumerate(matches), total=len(matches)):
         if break_flag: 
             break
         image_key, reference_key = match
 
-        # Load the image data
         with source_env.begin() as txn:
             image_data = load(txn.get(image_key.encode()))
             image_bands = ["VH", "VV"] # Sentinel 1 bands
             image_tensor = np.stack([image_data[band] for band in image_bands])
         image_tensor = torch.tensor(image_tensor, dtype=torch.float32).unsqueeze(0).to(device)
-        # image_tensor = pad_image(image_tensor, 128, 128)
 
-        # Perform forward pass to capture activations
+        # Forward, capture activations
         activations.clear()
         with torch.no_grad():
             outputs = model(image_tensor)
@@ -870,7 +782,7 @@ def store_activations(matches, model, lmdb_path, source_lmdb_path, layer_names, 
             for layer_name, activation in batch_activations.items():
                 if layer_name not in layer_names:
                     continue
-                # Create a unique key for each layer's activation   
+                # Create a unique key for each layer"s activation   
                 layer_key = f"{image_key}_{layer_name}"
                 txn.put(layer_key.encode(), activation.tobytes())
 
@@ -879,6 +791,9 @@ def store_activations(matches, model, lmdb_path, source_lmdb_path, layer_names, 
 
 
 def test_store_activations(model, lmdb_path, source_lmdb, image_reference, layer_name):
+    """
+    Verify that activations are stored correctly in LMDB.
+    """
     activations = {}
     setup_hooks(model, activations)
 
@@ -893,20 +808,20 @@ def test_store_activations(model, lmdb_path, source_lmdb, image_reference, layer
 
     image, mask = get_image_and_mask_from_key(image_reference, lmdb_path = source_lmdb)
     image = torch.tensor(image, dtype=torch.float32).to(device).unsqueeze(0)
-    # image = pad_image(image, 120, 120)
 
-    # Forward pass to capture activation
+    # Forward, capture activation
     output = model(image)
     layer_activations = activations[layer_name]
 
-    # Compare the stored activation with the computed activation
-    # Compare layer1_activations with the loaded activation_tensor
+    # Compare stored activation with computed activation
     if torch.allclose(layer_activations, activation_tensor.to(device)):
         print("Activations match successfully!")
 
 
 def load_activation(image_reference, layer_name, env):
-    """Load the activation tensor from LMDB with optimized retrieval."""
+    """
+    Load the activation tensor from LMDB.
+    """
     with env.begin() as txn:
         key = f"{image_reference}_{layer_name}".encode()
         activation_data = txn.get(key)
@@ -914,30 +829,27 @@ def load_activation(image_reference, layer_name, env):
             return None
 
         activation_array = np.frombuffer(activation_data, dtype=np.float32)
-        activation_tensor = torch.from_numpy(activation_array).reshape(LAYER_SHAPES[layer_name])
+        activation_tensor = torch.tensor( activation_array.copy(), dtype=torch.float32 ).reshape(LAYER_SHAPES[layer_name])
         return activation_tensor
 
 
 def extract_region_activations(activation, region_coords, layer_name):
+    """
+    Extracts a specific region from the activation tensor based on the provided coordinates and layer name.
+    """
     factor = SCALE_FACTORS.get(layer_name)
     if factor is None:
-        raise ValueError(f"Layer '{layer_name}' not found in SCALE_FACTORS.")
+        raise ValueError(f"Layer {layer_name} not found in SCALE_FACTORS.")
 
     x1, y1, x2, y2 = region_coords
-    # print(f"Original coordinates: {x1}, {y1}, {x2}, {y2}")
-    # print(f"Scaling factor: {factor}")
-
-    # Use rounding for starting coordinates and ceil for ending coordinates.
+    # Scale coordinates based on the factor
     scaled_x1 = int(np.round(x1 / factor))
     scaled_y1 = int(np.round(y1 / factor))
     scaled_x2 = int(np.ceil(x2 / factor))
     scaled_y2 = int(np.ceil(y2 / factor))
-    # print(f"Scaled coordinates: {scaled_x1}, {scaled_y1}, {scaled_x2}, {scaled_y2}")
 
     extracted = activation[:, :, scaled_y1:scaled_y2, scaled_x1:scaled_x2]
-    # print(f"Extracted region shape: {extracted.shape}")
     return extracted
-
 
 def get_activation(name, dictionary):
     def hook(model, input, output):
@@ -945,16 +857,25 @@ def get_activation(name, dictionary):
     return hook
 
 def setup_hooks(model, activations_dict):
+    """
+    Set up hooks to capture activations from specific layers of the model.
+
+    Note: Specific for the current implementation of the model.
+    """
     for name, layer in model.named_modules():
         if isinstance(layer, torch.nn.Sequential) and (name.startswith("encoder") or name.startswith("decoder")) and "downsample" not in name:
             layer.register_forward_hook(get_activation(name, activations_dict))
 
-'''
+"""
 Similarity Utilities
-'''
-def compute_similarity(query_activation_flat, candidate_activation_flat, metric='cosine'):
-    """Compute similarity efficiently using pre-flattened tensors."""
-    return F.cosine_similarity(query_activation_flat, candidate_activation_flat, dim=1).item() if metric == 'cosine' else -torch.norm(query_activation_flat - candidate_activation_flat, dim=1).item()
+"""
+def compute_similarity(query_activation_flat, candidate_activation_flat, metric="cosine"):
+    """
+    Compute similarity efficiently using pre-flattened tensors.
+
+    Note: Currently supports "cosine" and "euclidean" metrics.
+    """
+    return F.cosine_similarity(query_activation_flat, candidate_activation_flat, dim=1).item() if metric == "cosine" else -torch.norm(query_activation_flat - candidate_activation_flat, dim=1).item()
 
 def plot_similarities(query_image, query_predicted, similar_images, similar_masks, titles, draw_boxes):
     """
@@ -971,7 +892,7 @@ def plot_similarities(query_image, query_predicted, similar_images, similar_mask
     fig, axes = plt.subplots(2, num_images, figsize=(18, 6))
 
     # Display Query Image and Mask
-    axes[0, 0].imshow(query_image[1].cpu().numpy(), cmap='gray')  # First Band
+    axes[0, 0].imshow(query_image[1].cpu().numpy(), cmap="gray")  # First Band
     axes[0, 0].set_title("Query Image")
     axes[0, 0].axis("off")
     axes[1, 0].imshow(query_predicted)  # Query mask (HW)
@@ -980,25 +901,25 @@ def plot_similarities(query_image, query_predicted, similar_images, similar_mask
 
     # Draw box in query image
     x1,y1,x2,y2 = draw_boxes.pop(0)
-    rect1 = patches.Rectangle((x1, y1), x2 - x1, y2 - y1, linewidth=1, edgecolor='c', facecolor='none')
-    rect2 = patches.Rectangle((x1, y1), x2 - x1, y2 - y1, linewidth=1, edgecolor='c', facecolor='none')
+    rect1 = patches.Rectangle((x1, y1), x2 - x1, y2 - y1, linewidth=1, edgecolor="c", facecolor="none")
+    rect2 = patches.Rectangle((x1, y1), x2 - x1, y2 - y1, linewidth=1, edgecolor="c", facecolor="none")
     axes[0, 0].add_patch(rect1)
     axes[1, 0].add_patch(rect2)
 
     # Display Top-5 Similar Images and Masks
     for i, (img, mask, title, draw_box) in enumerate(zip(similar_images, similar_masks, titles, draw_boxes), start=1):
-        axes[0, i].imshow(img[0].cpu().numpy(), cmap='gray')
+        axes[0, i].imshow(img[0].cpu().numpy(), cmap="gray")
         axes[0, i].set_title(f"Prototype {i}: {title}")
         axes[0, i].axis("off")
         axes[1, i].imshow(mask)  # Mask (HW)
         axes[1, i].set_title(f"Segmentation Mask {i}")
         axes[1, i].axis("off")
 
-        # Draw the box if available
+        # Draw box if available
         if draw_box:
             x1, y1, x2, y2 = draw_box
-            rect1 = patches.Rectangle((x1, y1), x2 - x1, y2 - y1, linewidth=1, edgecolor='r', facecolor='none')
-            rect2 = patches.Rectangle((x1, y1), x2 - x1, y2 - y1, linewidth=1, edgecolor='r', facecolor='none')
+            rect1 = patches.Rectangle((x1, y1), x2 - x1, y2 - y1, linewidth=1, edgecolor="r", facecolor="none")
+            rect2 = patches.Rectangle((x1, y1), x2 - x1, y2 - y1, linewidth=1, edgecolor="r", facecolor="none")
             axes[0, i].add_patch(rect1)
             axes[1, i].add_patch(rect2)
 
@@ -1006,7 +927,7 @@ def plot_similarities(query_image, query_predicted, similar_images, similar_mask
     plt.show()
 
 def find_n_similar_regions(query_activation, layer_name, train_image_keys, activation_lmdb_path, 
-                           n=5, region_coords=None, metric='cosine'):
+                           n=5, region_coords=None, metric="cosine"):
     """
     Find the top-N most similar regions in training images compared to a fixed region in the query image.
     
@@ -1021,7 +942,7 @@ def find_n_similar_regions(query_activation, layer_name, train_image_keys, activ
         activation_lmdb_path (str): Path to the LMDB database storing activations.
         n (int): Number of most similar regions to return.
         region_coords (Tuple[int, int, int, int]): (x1, y1, x2, y2) coordinates of the query region.
-        metric (str): Similarity metric (e.g., 'cosine', 'euclidean').
+        metric (str): Similarity metric (e.g., "cosine", "euclidean").
 
     Returns:
         List[Tuple[float, str, Tuple[int, int, int, int]]]: 
@@ -1041,12 +962,13 @@ def find_n_similar_regions(query_activation, layer_name, train_image_keys, activ
     win_w, win_h = query_tensor.shape[-2:]
     acti_w, acti_h = query_activation.shape[-2:]
 
-    # Define amount of division
+    # Amount of division for sliding window
     divisions_w = int(np.ceil(acti_w / win_w))
     divisions_h = int(np.ceil(acti_h / win_h))
 
     factor = SCALE_FACTORS[layer_name]
 
+    # Debugging information
     if divisions_w == 0 or divisions_h == 0:
         print("Error: Query activation map is not square.")
         print(f"Activation Map Dimensions: {acti_w}x{acti_h}, Window Dimensions: {win_w}x{win_h}")
@@ -1058,12 +980,11 @@ def find_n_similar_regions(query_activation, layer_name, train_image_keys, activ
     with env.begin() as txn:
         for train_image_key in train_image_keys:
             train_activation = load_activation(train_image_key, layer_name, env=env)
-            # count_comparisions = 0
             if train_activation is None:
                 continue
 
             train_tensor = train_activation.to(device)
-            _, _, H, W = train_tensor.shape  # Activation map dimensions
+            _, _, H, W = train_tensor.shape
 
             x_positions = list(range(0, W, win_w))
             if divisions_w * win_w > W:
@@ -1075,16 +996,12 @@ def find_n_similar_regions(query_activation, layer_name, train_image_keys, activ
                 # print("Warning: Activation map is smaller than query window.")
                 y_positions[-1] = H - win_h
 
-            # print("Debug: X Positions:", [x*factor for x in x_positions])	
-            # print("Debug: Y Positions:", [y*factor for y in y_positions])	
-
             # Slide a window over the activation map
             for y in y_positions:
                 for x in x_positions:
                     candidate_activation = train_tensor[:, :, y:y+win_h, x:x+win_w]
                     candidate_activation_flat = candidate_activation.flatten(start_dim=1)
                     similarity = compute_similarity(query_tensor_flat, candidate_activation_flat, metric=metric)
-                    #count_comparisions += 1
 
                     # Store top-N matches
                     region = (x*factor, y*factor, (x+win_w)*factor,(y+win_h)*factor)
@@ -1104,6 +1021,19 @@ def find_n_similar_images(query_image, layer_names, image_keys,
     - Extracts the query region.
     - Finds top matching regions using sliding window search.
     - Displays retrieved regions from training images.
+
+    Args:
+        query_image (np.ndarray): The query image to search for similar regions.
+        layer_names (str or List[str]): Layer names to investiage.
+        image_keys (List[str]): List of training image keys. 
+        activations_lmdb_path (str): Path to the LMDB database storing activations.
+        images_lmdb_path (str): Path to the LMDB database storing images. For plotting.
+        model (torch.nn.Module): The model used for inference.
+        img_hw (Tuple[int, int]): Height and width of the input images.
+        color_map (np.ndarray): Color map for visualization.
+        region_coords (Tuple[int, int, int, int]): Coordinates of the query region.
+        n (int): Number of similar regions to return.
+        plotting (bool): Whether to plot the results or return them.
     """
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
@@ -1160,53 +1090,23 @@ def find_n_similar_images(query_image, layer_names, image_keys,
         )
     return top_n_results
 
-'''
-Overlap Utilities
-'''
+"""
+General Experiment Utilities
+"""
+
+"""
+Overlap
+"""
 def get_top_subset(layer, top_n):
-    """Return a set of unique keys for the first top_n entries of the layer."""
-    # print("Debug:", layer[:top_n])
+    """
+    Return a set of unique keys for the first top_n entries of the layer.
+    """
     return {(name, region) for (score, name, region) in layer[:top_n]}
 
-def get_pairwise_comparisons(list_of_lists, layer_names, n1 = 5, n2 = 5, eta = 0.85):
-    """
-    Compare lists pairwise.
-    
-    Args:
-        lists (list of lists): List of lists to compare. Each list should contain tuples of (similarity, reference, region).
-        n1 (int): Number of elements to consider from list1.
-        n2 (int): Number of elements to consider from list2.
-
-    Returns a dictionary with pairwise overlaps.
-    """
-    results = {}
-    n = len(layer_names)
-
-    # Precompute sets for each layer:
-    top_n1_sets = [get_top_subset(layer, n1) for layer in list_of_lists]
-    top_n2_sets = [get_top_subset(layer, n2) for layer in list_of_lists]
-
-    for i in range(n):
-        for j in range(i+1, n):
-            if i == j:
-                continue # this is not symmetrical!
-
-            overlap = set()
-            for ref1, region1 in top_n1_sets[i]:
-                for ref2, region2 in top_n2_sets[j]:
-                    if ref1 == ref2 and regions_match_via_iou(region1, region2, eta):
-                        overlap.add((ref1, region1))
-
-            results[(i, j)] = {
-                'First Layer': layer_names[i],
-                'Second Layer': layer_names[j],
-                'Overlap Top X with Top Y': (n1,n2),
-                'overlap_count': len(overlap),
-                'overlap': overlap
-            }
-    return results
-
 def get_pairwise_overlap(list_of_lists, layer_names, eta = 0.85):
+    """
+    Compute pairwise overlaps between Top-{5,10,20,50} elements of each layer in the list_of_lists.
+    """
     results = {}
     n = len(layer_names)
     # Precompute sets for each layer:
@@ -1244,21 +1144,23 @@ def get_pairwise_overlap(list_of_lists, layer_names, eta = 0.85):
                         overlap_50.add((ref1, region1))
 
             results[(i, j)] = {
-                'First Layer': layer_names[i],
-                'Second Layer': layer_names[j],
-                'top 5': len(overlap_5),
-                'top 10': len(overlap_10),
-                'top 20': len(overlap_20),
-                'top 50': len(overlap_50),
-                'overlap top 5': overlap_5,
-                'overlap top 10': overlap_10,
-                'overlap top 20': overlap_20,
-                'overlap top 50': overlap_50
+                "First Layer": layer_names[i],
+                "Second Layer": layer_names[j],
+                "top 5": len(overlap_5),
+                "top 10": len(overlap_10),
+                "top 20": len(overlap_20),
+                "top 50": len(overlap_50),
+                "overlap top 5": overlap_5,
+                "overlap top 10": overlap_10,
+                "overlap top 20": overlap_20,
+                "overlap top 50": overlap_50
             }
     return results
 
 def regions_match_via_iou(r1, r2, eta=0.7):
-    """Returns True if IoU between r1 and r2 is above eta"""
+    """
+    Returns True if IoU between r1 and r2 is above eta
+    """
     x1 = max(r1[0], r2[0])
     y1 = max(r1[1], r2[1])
     x2 = min(r1[2], r2[2])
@@ -1268,8 +1170,6 @@ def regions_match_via_iou(r1, r2, eta=0.7):
     area1 = (r1[2] - r1[0]) * (r1[3] - r1[1])
     area2 = (r2[2] - r2[0]) * (r2[3] - r2[1])
     union_area = area1 + area2 - inter_area
-    # print(f"r1: {r1}, r2: {r2}, x1: {x1}, y1: {y1}, x2: {x2}, y2: {y2}\n")
-    # print(f"inter_area: {inter_area}, area1: {area1}, area2: {area2}, union_area: {union_area}\n")
 
     iou = inter_area / union_area if union_area > 0 else 0
     # print(f"iou: {iou}, eta: {eta}")
@@ -1278,15 +1178,13 @@ def regions_match_via_iou(r1, r2, eta=0.7):
 
 def get_aggregate_overlaps(all_image_layers, layer_names, eta = 0.85):
     """
-    For each image (a list of layers), compute pairwise overlaps and average the overlap
-    counts across all images for the same layer pair.
+    Aggregate pairwise overlaps of Top-{5,10,20,50} across all image layers.
     
     Args:
         overlap_results (dict): Dictionary with pairwise overlaps.
 
     Returns a dictionary with aggregated results.
     """
-    # print(f"eta: {eta}")
     aggregated = {}
     for image_layers in all_image_layers:
         # Compute overlaps for current image.
@@ -1295,68 +1193,44 @@ def get_aggregate_overlaps(all_image_layers, layer_names, eta = 0.85):
             # key is (i, j) corresponding to the layer indices.
             if key not in aggregated:
                 aggregated[key] = {
-                    'First Layer': value['First Layer'],
-                    'Second Layer': value['Second Layer'],
-                    'top 5': [],
-                    'top 10': [],
-                    'top 20': [],
-                    'top 50': []
+                    "First Layer": value["First Layer"],
+                    "Second Layer": value["Second Layer"],
+                    "top 5": [],
+                    "top 10": [],
+                    "top 20": [],
+                    "top 50": []
                 }
-            for metric in ['top 5', 'top 10', 'top 20', 'top 50']:
+            for metric in ["top 5", "top 10", "top 20", "top 50"]:
                 aggregated[key][metric].append(value[metric])
 
-    # Average the overlap counts for each layer pair.
+    # Average overlap counts for each layer pair.
     averaged = {}
     for key, value in aggregated.items():
         averaged[key] = {
-            'First Layer': value['First Layer'],
-            'Second Layer': value['Second Layer'],
-            'top 5': np.mean(value['top 5']),
-            'top 10': np.mean(value['top 10']),
-            'top 20': np.mean(value['top 20']),
-            'top 50': np.mean(value['top 50']),
+            "First Layer": value["First Layer"],
+            "Second Layer": value["Second Layer"],
+            "top 5": np.mean(value["top 5"]),
+            "top 10": np.mean(value["top 10"]),
+            "top 20": np.mean(value["top 20"]),
+            "top 50": np.mean(value["top 50"]),
         }
 
     return averaged
 
-''' 
+""" 
 Multi-Purpose Utilities
-'''
+"""
 
 def pad_image(img_tensor, target_height, target_width):
     """
     Pads an image tensor to the target height and width.
-
-    Args:
-        img_tensor (torch.Tensor): The image tensor to pad.
-        target_height (int): The target height.
-        target_width (int): The target width.
-
-    Returns:
-        torch.Tensor: The padded image tensor.
     """
     _, _, h, w = img_tensor.shape
     pad_h = target_height - h
     pad_w = target_width - w
     padding = (0, pad_w, 0, pad_h)  # (left, right, top, bottom)
-    padded_img = F.pad(img_tensor, padding, mode='constant', value=0)
+    padded_img = F.pad(img_tensor, padding, mode="constant", value=0)
     return padded_img
-
-def mask_to_pixel_classes(mask, pixel_value_to_class_index):
-    """
-    Determine the present pixel classes in a mask tensor.
-
-    Args:
-        mask (torch.Tensor): The mask tensor to convert.
-        pixel_value_to_class_index (Dict [int, int]): A dictionary mapping pixel values to class indices.
-    
-    Returns:
-        Dict[int, int]: A dictionary mapping pixel classes to their counts.
-    """
-    unique, counts = np.unique(mask, return_counts=True)
-    class_counts = {pixel_value_to_class_index[p]: c for p, c in zip(unique, counts)}
-    return class_counts
-
 
 def show_overlap_matrix(data, targets, layer_names, mode = "overlap", title_in = None, save_plot = False):
     """
@@ -1366,9 +1240,7 @@ def show_overlap_matrix(data, targets, layer_names, mode = "overlap", title_in =
         data (Dict): Dictionary containing the overlap data.
         targets (List[str]): List of target names (e.g. "top 5")
         layer_names (List[str]): List of layer names (e.g. "encoder.layer3")
-    
     """
-
     if not isinstance(layer_names, list): layer_names = [layer_names]
     if not isinstance(targets, list): targets = [targets]
     
@@ -1378,7 +1250,7 @@ def show_overlap_matrix(data, targets, layer_names, mode = "overlap", title_in =
         for i in range(len(layer_names)):
             for j in range(len(layer_names)):
                 if i != j:
-                    # Get the overlap count for the target
+                    # Get overlap count for target
                     if (i, j) in data.keys():
                         matrix[i,j] = data[(i, j)][target]
                     elif (j, i) in data.keys():
@@ -1386,9 +1258,9 @@ def show_overlap_matrix(data, targets, layer_names, mode = "overlap", title_in =
                     else:
                         matrix[i,j] = 0 # when i = j
                     
-        # Convert the matrix to a DataFrame for better visualization
+        # Convert matrix to DataFrame
         fig, ax = plt.subplots(figsize=(8, 6))
-        fig.colorbar(ax.matshow(matrix, cmap='Blues'))
+        fig.colorbar(ax.matshow(matrix, cmap="Blues"))
 
         # Annotate heatmap
         for i in range(len(layer_names)):
@@ -1400,12 +1272,11 @@ def show_overlap_matrix(data, targets, layer_names, mode = "overlap", title_in =
                 print(f"Overlap Matrix - {target}")
                 title = f"Prototype Overlap Matrix - {target}"
             else:
-                (p1,p2) = data[(0,1)]['Prototype Overlap Top X with Top Y']
+                (p1,p2) = data[(0,1)]["Prototype Overlap Top X with Top Y"]
                 title = f"Top {p1} Prototype Overlap with Top {p2}"
         else:
             title = title_in
 
-        # Set the ticks and labels
         ax.set_xticks(range(len(layer_names)))
         ax.set_yticks(range(len(layer_names)))
         ax.set_xticklabels(layer_names, rotation=30)

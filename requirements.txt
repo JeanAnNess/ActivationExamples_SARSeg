@@ -1,7 +1,3 @@
-# black
-# flake8 
-# isort  #isort your_file.py
-# mkdocs
 pip
 python-dotenv
 -e .
@@ -9,6 +5,7 @@ python-dotenv
 albumentations
 matplotlib
 ipykernel
+ipywidgets
 lmdb
 loguru
 numpy

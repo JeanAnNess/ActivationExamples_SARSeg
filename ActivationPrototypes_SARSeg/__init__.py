@@ -1,1 +1,1 @@
-from ActivationPrototypes_SARSeg import config  # noqa: F401
+from ActivationPrototypes_SARSeg import thesis_utils
