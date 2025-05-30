@@ -1,61 +1,66 @@
 # Activation-Based Prototypes for Explainability in Semantic Segmentation of SAR Imagery
 
-<a target="_blank" href="https://cookiecutter-data-science.drivendata.org/">
-    <img src="https://img.shields.io/badge/CCDS-Project%20template-328F97?logo=cookiecutter" />
-</a>
+This repository contains the implementation of my Bachelor Thesis at TU Berlin. 
 
-Code base for my Bachelor Thesis at TUB
+The project implements a framework utilizing prototypes and retrieving highest the matching ones for a query based on the activations through different neural network layers.
 
-## Project Organization
+## Project Structure
 
 ```
-├── LICENSE            <- Open-source license if one is chosen
-├── Makefile           <- Makefile with convenience commands like `make data` or `make train`
-├── README.md          <- The top-level README for developers using this project.
+ActivationPrototypes-SARSeg/
+├── LICENSE            
+├── README.md      
 ├── data
-│   ├── external       <- Data from third party sources.
-│   ├── interim        <- Intermediate data that has been transformed.
-│   ├── processed      <- The final, canonical data sets for modeling.
-│   └── raw            <- The original, immutable data dump.
+│   └── BigEarthNet
+│       ├── Encoded-BigEarthNet     <- LMDB created via rico-hdl
+│       ├── prototypes              <- generated in `generating_prototypes` 
+│       ├── Reference_Maps
+│       └── metadata.parquet
 │
-├── docs               <- A default mkdocs project; see www.mkdocs.org for details
+├── models             
 │
-├── models             <- Trained and serialized models, model predictions, or model summaries
+├── notebooks
+│   ├── training_SkipConn           <- Training the U-Net
+│   ├── generating_prototypes
+│   ├── find_top_n                  <- Precalculate Prototype Retrieval
+│   ├── top_matches_skipp_conn.csv  <- Precalculated as CSV
+│   ├── qualitative_analysis
+│   ├── quantitative_analysis
+│   ├── noisy_results.csv           <- Results for `Continuity` Experiment
+│   └── runtime       
+│                        
+├── pyproject.toml    
+│                      
+├── requirements.txt   
 │
-├── notebooks          <- Jupyter notebooks. Naming convention is a number (for ordering),
-│                         the creator's initials, and a short `-` delimited description, e.g.
-│                         `1.0-jqp-initial-data-exploration`.
-│
-├── pyproject.toml     <- Project configuration file with package metadata for 
-│                         ActivationPrototypes-SARSeg and configuration for tools like black
-│
-├── references         <- Data dictionaries, manuals, and all other explanatory materials.
-│
-├── reports            <- Generated analysis as HTML, PDF, LaTeX, etc.
-│   └── figures        <- Generated graphics and figures to be used in reporting
-│
-├── requirements.txt   <- The requirements file for reproducing the analysis environment, e.g.
-│                         generated with `pip freeze > requirements.txt`
-│
-├── setup.cfg          <- Configuration file for flake8
-│
-└── ActivationPrototypes-SARSeg   <- Source code for use in this project.
-    │
-    ├── __init__.py             <- Makes ActivationPrototypes-SARSeg a Python module
-    │
-    ├── config.py               <- Store useful variables and configuration
-    │
-    ├── dataset.py              <- Scripts to download or generate data
-    │
-    ├── features.py             <- Code to create features for modeling
-    │
-    ├── modeling                
-    │   ├── __init__.py 
-    │   ├── predict.py          <- Code to run model inference with trained models          
-    │   └── train.py            <- Code to train models
-    │
-    └── plots.py                <- Code to create visualizations
+└── ActivationPrototypes-SARSeg 
+    ├── __init__.py            
+    └── thesis_utils               
 ```
 
---------
+## References
 
+1. **reBEN**: This dataset is a large-scale remote sensing dataset used in this project for training and evaluation.  
+   - **Paper**: K. Clasen, L. Hackel, T. Burgert, G. Sumbul, B. Demir, V. Markl, "reBEN: Refined BigEarthNet Dataset for Remote Sensing Image Analysis", IEEE International Geoscience and Remote Sensing Symposium (IGARSS), 2025.  
+
+2. **ConfigILM**: A general-purpose configurable library for combining image and language models for visual question answering.  
+   - **Paper**: L. Hackel, K. Clasen, B. Demir, "ConfigILM: A General Purpose Configurable Library for Combining Image and Language Models for Visual Question Answering", SoftwareX 26 (2024): 101731.  
+
+3. **Segmentation Models PyTorch**: This project utilizes functions from the [Segmentation Models PyTorch](https://github.com/qubvel-org/segmentation_models.pytorch) library.
+
+## Datasets
+
+### Getting and Loading Datasets as LMDB
+
+To use the **reBEN dataset** for training or evaluation, follow these steps to download and prepare the dataset in LMDB format:
+
+#### Step 1: Download the Datasets
+- Visit the [BigEarthNet website](https://bigearth.net) to download the following:
+  - S1/S2 satellite data
+  - Reference maps
+  - metadata parquet
+
+#### Step 2: Convert to LMDB format using `rico-hdl`
+- Install `rico-hdl` by following the instructions at [rico-hdl GitHub repository](https://github.com/kai-tub/rico-hdl).
+
+- Store the required files according to the [Project Structure](#project-structure) section. described above
