@@ -28,6 +28,7 @@ ActivationPrototypes-SARSeg/
 │   ├── top_matches_skipp_conn.csv  <- Precalculated as CSV
 │   ├── qualitative_analysis
 │   ├── quantitative_analysis
+│   ├── plots                       <- Stores the plots from experiments
 │   ├── noisy_results.csv           <- Results for `Continuity` Experiment
 │   └── runtime 
 │      
