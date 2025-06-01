@@ -1,0 +1,4 @@
+models/*.pth filter=lfs diff=lfs merge=lfs -text
+models/unet_epoch_20.pth filter=lfs diff=lfs merge=lfs -text
+models/unet120_full_skipconn_best.pth filter=lfs diff=lfs merge=lfs -text
+notebooks/analyze_matches.ipynb filter=lfs diff=lfs merge=lfs -text
