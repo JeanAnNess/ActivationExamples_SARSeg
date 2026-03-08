@@ -10,12 +10,12 @@ The project implements a framework utilizing prototypes and retrieving highest t
 ActivationPrototypes-SARSeg/
 └── ActivationPrototypes-SARSeg 
 │   ├── __init__.py            
-│   └── thesis_utils  
+│   └── examples_utils  
 │  
 ├── data                            <- Will have to be created and populated by you
 │   └── BigEarthNet
 │       ├── Encoded-BigEarthNet     <- LMDB created via rico-hdl
-│       ├── prototypes              <- generated in `generating_prototypes` 
+│       ├── examples_subsample              <- generated in `generating_examples` 
 │       ├── Reference_Maps
 │       └── metadata.parquet
 │
@@ -23,8 +23,8 @@ ActivationPrototypes-SARSeg/
 │
 ├── notebooks
 │   ├── training_SkipConn           <- Training the U-Net
-│   ├── generating_prototypes
-│   ├── find_top_n                  <- Precalculate Prototype Retrieval
+│   ├── generating_examples
+│   ├── find_top_n                  <- Precalculate Example Retrieval
 │   ├── top_matches_skipp_conn.csv  <- Precalculated as CSV
 │   ├── qualitative_analysis
 │   ├── quantitative_analysis
