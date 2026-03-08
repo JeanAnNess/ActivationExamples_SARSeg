@@ -1,21 +1,45 @@
-# Activation-Based Prototypes for Explainability in Semantic Segmentation of SAR Imagery
+# Activation-Based Examples for Explainability in Semantic Segmentation of SAR Imagery
 
-This repository contains the implementation of my Bachelor Thesis at TU Berlin. 
+This repository contains the implementation for the paper "Activation-Based Examples for Explainability in Semantic Segmentation of SAR Imagery".
 
-The project implements a framework utilizing prototypes and retrieving highest the matching ones for a query based on the activations through different neural network layers.
+The project implements a framework utilizing examples and retrieving the highest matching ones for a query based on the activations through different neural network layers.
+
+## Installation
+
+### 1) Create environment
+
+```powershell
+conda create -n sar_seg python=3.10 -y
+conda activate sar_seg
+```
+
+### 2) Install package dependencies from `pyproject.toml`
+
+CPU setup (default):
+
+```powershell
+pip install -e .
+```
+
+CUDA 11.8 setup (recommended for GPU training/inference):
+
+```powershell
+pip install --extra-index-url https://download.pytorch.org/whl/cu118 torch==2.7.1+cu118 torchvision==0.22.1+cu118
+pip install --extra-index-url https://download.pytorch.org/whl/cu118 -e .
+```
 
 ## Project Structure
 
 ```
-ActivationPrototypes-SARSeg/
-└── ActivationPrototypes-SARSeg 
+ActivationExamples_SARSeg/
+└── ActivationExamples_SARSeg 
 │   ├── __init__.py            
-│   └── thesis_utils  
+│   └── examples_utils  
 │  
 ├── data                            <- Will have to be created and populated by you
 │   └── BigEarthNet
 │       ├── Encoded-BigEarthNet     <- LMDB created via rico-hdl
-│       ├── prototypes              <- generated in `generating_prototypes` 
+│       ├── examples_subsample              <- generated in `generating_examples` 
 │       ├── Reference_Maps
 │       └── metadata.parquet
 │
@@ -23,8 +47,8 @@ ActivationPrototypes-SARSeg/
 │
 ├── notebooks
 │   ├── training_SkipConn           <- Training the U-Net
-│   ├── generating_prototypes
-│   ├── find_top_n                  <- Precalculate Prototype Retrieval
+│   ├── generating_examples
+│   ├── find_top_n                  <- Precalculate Example Retrieval
 │   ├── top_matches_skipp_conn.csv  <- Precalculated as CSV
 │   ├── qualitative_analysis
 │   ├── quantitative_analysis
@@ -36,10 +60,7 @@ ActivationPrototypes-SARSeg/
 │
 ├── README.md 
 │                        
-├── pyproject.toml    
-│                      
-└── requirements.txt   
-           
+└── pyproject.toml                        
 ```
 
 ## References

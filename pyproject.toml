@@ -5,7 +5,7 @@ build-backend = "setuptools.build_meta"
 [project]
 name = "ActivationPrototypes-SARSeg"
 version = "0.0.1"
-description = "Code base for my Bachelor Thesis at TUB"
+description = "Code base for the paper 'Activation-Based Examples for Explainability in Semantic Segmentation of SAR Imagery'"
 authors = [
   { name = "Janes Luc Sanne" },
 ]
@@ -16,6 +16,25 @@ classifiers = [
     "License :: OSI Approved :: MIT License"
 ]
 requires-python = "~=3.10"
+dependencies = [
+  "albumentations==1.3.1",
+  "lmdb==1.7.5",
+  "matplotlib==3.10.8",
+  "numpy==1.26.4",
+  "opencv-python==4.8.1.78",
+  "pandas==2.3.3",
+  "Pillow==12.1.0",
+  "rasterio==1.4.4",
+  "safetensors==0.7.0",
+  "scipy==1.15.3",
+  "seaborn==0.13.2",
+  "segmentation-models-pytorch==0.5.0",
+  "tensorboard==2.20.0",
+  "torch==2.7.1",
+  "torchvision==0.22.1",
+  "tqdm==4.67.2",
+  "reben-publication @ git+https://git.tu-berlin.de/rsim/reben-training-scripts.git@main",
+]
 
 [tool.setuptools.packages]
-find = { where = ["ActivationPrototypes_SARSeg"] }
+find = { where = ["ActivationExamples_SARSeg"] }
