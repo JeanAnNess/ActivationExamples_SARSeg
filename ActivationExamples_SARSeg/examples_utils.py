@@ -1,6 +1,5 @@
 """
 Utilities for Activation-Based Example Extraction and Visualization
-Authored by Janes Sanne
 """
 
 """
