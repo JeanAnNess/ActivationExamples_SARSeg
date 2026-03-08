@@ -1,4 +1,4 @@
-# Activation-Based Prototypes for Explainability in Semantic Segmentation of SAR Imagery
+# Activation-Based Examples for Explainability in Semantic Segmentation of SAR Imagery
 
 This repository contains the implementation for the paper "Activation-Based Examples for Explainability in Semantic Segmentation of SAR Imagery".
 
