@@ -64,3 +64,20 @@ class SARSegmentationDataset120(Dataset):
         mask_indices_one_hot = torch.tensor(mask_indices_one_hot, dtype=torch.long)
 
         return image_tensor, mask_indices_one_hot
+
+
+def create_reproducible_subset(matches, n, seed=42):
+    """
+    Select a reproducible random subset of match tuples.
+
+    Args:
+        matches (List[Tuple[str, str]]): Full list of (image_key, mask_key) pairs.
+        n (int): Number of samples to select (use len(matches)//N for fraction).
+        seed (int): Random seed for reproducibility.
+
+    Returns:
+        List[Tuple[str, str]]: Subset of match tuples.
+    """
+    rng = np.random.default_rng(seed)
+    indices = rng.choice(len(matches), size=n, replace=False)
+    return [matches[i] for i in indices]

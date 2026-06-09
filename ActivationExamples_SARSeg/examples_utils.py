@@ -14,3 +14,4 @@ from ActivationExamples_SARSeg.analysis.overlap import *
 from ActivationExamples_SARSeg.visualization.plotting import *
 from ActivationExamples_SARSeg.models.unet import *
 from ActivationExamples_SARSeg.models.registry import *
+from ActivationExamples_SARSeg.models.deeplabv3plus import *

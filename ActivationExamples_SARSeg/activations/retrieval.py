@@ -73,7 +73,8 @@ def plot_similarities(query_image, query_predicted, similar_images, similar_mask
 
 
 def find_n_similar_regions(query_activation, layer_name, train_image_keys, activation_lmdb_path,
-                           n=5, region_coords=None, metric="cosine"):
+                           n=5, region_coords=None, metric="cosine", scale_factors=None, arch_name="unet",
+                           dtype=torch.float32):
     """
     Find the top-N most similar regions in training images compared to a fixed region in the query image.
     
@@ -97,11 +98,15 @@ def find_n_similar_regions(query_activation, layer_name, train_image_keys, activ
     min_heap = []
     env = lmdb.open(activation_lmdb_path, readonly=True, lock=False)
 
+    if scale_factors is None:
+        scale_factors = SCALE_FACTORS
+
     # Extract query activation for the specified region
     query_tensor = query_activation.to(device)
 
     if region_coords:
-        query_tensor = extract_region_activations(query_tensor, region_coords, layer_name)
+        query_tensor = extract_region_activations(query_tensor, region_coords, layer_name,
+                                                    scale_factors=scale_factors)
 
     query_tensor_flat = query_tensor.flatten(start_dim=1)
 
@@ -111,7 +116,7 @@ def find_n_similar_regions(query_activation, layer_name, train_image_keys, activ
     divisions_w = int(np.ceil(acti_w / win_w))
     divisions_h = int(np.ceil(acti_h / win_h))
 
-    factor = SCALE_FACTORS[layer_name]
+    factor = scale_factors[layer_name]
 
     if divisions_w == 0 or divisions_h == 0:
         print("Error: Query activation map is not square.")
@@ -123,7 +128,7 @@ def find_n_similar_regions(query_activation, layer_name, train_image_keys, activ
 
     with env.begin() as txn:
         for train_image_key in train_image_keys:
-            train_activation = load_activation(train_image_key, layer_name, env=env)
+            train_activation = load_activation(train_image_key, layer_name, env=env, arch_name=arch_name, dtype=dtype)
             if train_activation is None:
                 continue
 
@@ -159,7 +164,9 @@ def find_n_similar_regions(query_activation, layer_name, train_image_keys, activ
 
 def find_n_similar_images(query_image, layer_names, image_keys,
                           activations_lmdb_path, images_lmdb_path, model,
-                          img_hw=(120, 120), color_map=None, region_coords=None, n=5, plotting=True):
+                          img_hw=(120, 120), color_map=None, region_coords=None, n=5,
+                          plotting=True, scale_factors=None, layer_shapes=None, arch_name="unet",
+                          dtype=torch.float32):
     """
     Displays the query image alongside the most similar image regions.
 
@@ -183,6 +190,10 @@ def find_n_similar_images(query_image, layer_names, image_keys,
     if color_map is None:
         from ..config import color_map as _cmap
         color_map = _cmap
+    if scale_factors is None:
+        scale_factors = SCALE_FACTORS
+    if layer_shapes is None:
+        layer_shapes = LAYER_SHAPES
 
     activations = {}
     setup_hooks(model, activations)
@@ -203,7 +214,10 @@ def find_n_similar_images(query_image, layer_names, image_keys,
 
     # Find similar images based on activations
     top_n_results = [find_n_similar_regions(qa, layer_name, image_keys, activations_lmdb_path,
-                                             n=50, region_coords=region_coords)
+                                             n=50, region_coords=region_coords,
+                                             scale_factors=scale_factors,
+                                             arch_name=arch_name,
+                                             dtype=dtype)
                      for layer_name, qa in zip(layer_names, query_activations)]
 
     if not plotting:

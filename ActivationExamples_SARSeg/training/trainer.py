@@ -20,9 +20,19 @@ def training(model,
              freeze_epochs=2,
              loss_weights=(1.0, 1.0),
              save_dir="../models/",
-             ignore_index=20):
+             ignore_index=20,
+             input_size=None,
+             optimizer=None,
+             scheduler=None,
+             best_val_loss=None,
+             patience_counter=0):
     """
     Training loop with combined Focal + Dice loss, per-class IoU/F1 logging, and tqdm progress.
+    
+    For incremental training (e.g. epochs 1-3 then 4-5 then 6-10):
+      1. First run: pass only epoch_start/epoch_end
+      2. After each run, a full checkpoint is saved
+      3. Resume: load_training_checkpoint() then pass optimizer=, scheduler=, best_val_loss=, patience_counter=
     """
     writer = SummaryWriter()
     device_type = "cuda" if torch.cuda.is_available() else "cpu"
@@ -32,13 +42,13 @@ def training(model,
     dice_loss = DiceLoss(mode="multiclass", ignore_index=ignore_index)
     w_focal, w_dice = loss_weights
 
-    optimizer = optim.AdamW(model.parameters(), lr=lr, weight_decay=1e-4)
-    scheduler = optim.lr_scheduler.ReduceLROnPlateau(optimizer, mode="min", factor=0.5, patience=2)
+    optimizer = optim.AdamW(model.parameters(), lr=lr, weight_decay=1e-4) if optimizer is None else optimizer
+    scheduler = optim.lr_scheduler.ReduceLROnPlateau(optimizer, mode="min", factor=0.5, patience=2) if scheduler is None else scheduler
 
     scaler = GradScaler()  # Mixed precision
-    best_val_loss = float("inf")
+    best_val_loss = float("inf") if best_val_loss is None else best_val_loss
     patience = 5  # Early stopping patience
-    patience_counter = 0
+    patience_counter = 0 if patience_counter is None else patience_counter
 
     for epoch in range(epoch_start, epoch_end + 1):
         if epoch == freeze_epochs + 1:
@@ -55,11 +65,18 @@ def training(model,
             images, masks = images.to(device), masks.to(device)
             masks = masks.argmax(dim=1)  # Convert one-hot to class indices
 
+            if input_size is not None:
+                images = F.pad(images, (0, input_size[1] - images.shape[3], 0, input_size[0] - images.shape[2]), mode="constant", value=0)
+                mask_pad = F.pad(masks.unsqueeze(1).float(), (0, input_size[1] - masks.shape[2], 0, input_size[0] - masks.shape[1]), mode="constant", value=ignore_index)
+                masks_to_use = mask_pad.squeeze(1).long()
+            else:
+                masks_to_use = masks
+
             optimizer.zero_grad()
             with autocast(device_type=device_type):
                 outputs = model(images)
-                loss_f = focal_loss(outputs, masks)
-                loss_d = dice_loss(outputs, masks)
+                loss_f = focal_loss(outputs, masks_to_use)
+                loss_d = dice_loss(outputs, masks_to_use)
                 loss = w_focal * loss_f + w_dice * loss_d
 
             scaler.scale(loss).backward()
@@ -68,7 +85,7 @@ def training(model,
             scaler.update()
 
             tp, fp, fn, tn = smp.metrics.get_stats(
-                outputs.argmax(dim=1).to(torch.int32), masks, mode="multiclass", num_classes=num_classes
+                outputs.argmax(dim=1).to(torch.int32), masks_to_use, mode="multiclass", num_classes=num_classes
             )
             iou = smp.metrics.iou_score(tp, fp, fn, tn, reduction="micro")
             f1 = smp.metrics.f1_score(tp, fp, fn, tn, reduction="micro")
@@ -102,14 +119,21 @@ def training(model,
                 images, masks = images.to(device), masks.to(device)
                 masks = masks.argmax(dim=1)
 
+                if input_size is not None:
+                    images = F.pad(images, (0, input_size[1] - images.shape[3], 0, input_size[0] - images.shape[2]), mode="constant", value=0)
+                    mask_pad = F.pad(masks.unsqueeze(1).float(), (0, input_size[1] - masks.shape[2], 0, input_size[0] - masks.shape[1]), mode="constant", value=ignore_index)
+                    masks_to_use = mask_pad.squeeze(1).long()
+                else:
+                    masks_to_use = masks
+
                 with autocast(device_type=device_type):
                     outputs = model(images)
-                    loss_f = focal_loss(outputs, masks)
-                    loss_d = dice_loss(outputs, masks)
-                    loss = w_focal * loss_f + w_dice * loss_d
+                    loss_f = focal_loss(outputs, masks_to_use)
+                    loss_d = dice_loss(outputs, masks_to_use)
+                loss = w_focal * loss_f + w_dice * loss_d
 
                 tp, fp, fn, tn = smp.metrics.get_stats(
-                    outputs.argmax(dim=1).to(torch.int32), masks, mode="multiclass", num_classes=num_classes
+                    outputs.argmax(dim=1).to(torch.int32), masks_to_use, mode="multiclass", num_classes=num_classes
                 )
                 iou = smp.metrics.iou_score(tp, fp, fn, tn, reduction="micro")
                 f1 = smp.metrics.f1_score(tp, fp, fn, tn, reduction="micro")
@@ -141,9 +165,12 @@ def training(model,
             best_val_loss = epoch_loss_val
             patience_counter = 0
             torch.save(model.state_dict(), f"{save_dir}/{model_name}_best.pth")  # Save best model
+            _save_training_checkpoint(model, optimizer, scheduler, epoch, best_val_loss, patience_counter, epoch_loss_val, f"{save_dir}/{model_name}_best_checkpoint.pth")
         else:
             patience_counter += 1
 
+        _save_training_checkpoint(model, optimizer, scheduler, epoch, best_val_loss, patience_counter, epoch_loss_val, f"{save_dir}/{model_name}_checkpoint_epoch_{epoch}.pth")
+        
         if patience_counter >= patience:
             print("Early stopping triggered!")
             break
@@ -156,7 +183,7 @@ def training(model,
     return model, optimizer
 
 
-def calculate_scores(model, test_loader, device, num_classes, ignore_index=20):
+def calculate_scores(model, test_loader, device, num_classes, ignore_index=20, input_size=None):
     """
     Perform evaluation on a given test set and calculate loss, IoU, and F1 score.
     """
@@ -171,10 +198,18 @@ def calculate_scores(model, test_loader, device, num_classes, ignore_index=20):
             images, masks = images.to(device), masks.to(device)
             # Convert one-hot encoded masks to class indices
             masks = masks.argmax(dim=1)
+
+            if input_size is not None:
+                images = F.pad(images, (0, input_size[1] - images.shape[3], 0, input_size[0] - images.shape[2]), mode="constant", value=0)
+                mask_pad = F.pad(masks.unsqueeze(1).float(), (0, input_size[1] - masks.shape[2], 0, input_size[0] - masks.shape[1]), mode="constant", value=ignore_index)
+                masks_to_use = mask_pad.squeeze(1).long()
+            else:
+                masks_to_use = masks
+
             outputs = model(images)
-            loss = criterion(outputs, masks)
+            loss = criterion(outputs, masks_to_use)
             tp, fp, fn, tn = smp.metrics.get_stats(
-                outputs.argmax(dim=1).to(torch.int32), masks, mode="multiclass", num_classes=num_classes
+                outputs.argmax(dim=1).to(torch.int32), masks_to_use, mode="multiclass", num_classes=num_classes
             )
             iou = smp.metrics.iou_score(tp, fp, fn, tn, reduction="micro")
             f1 = smp.metrics.f1_score(tp, fp, fn, tn, reduction="micro")
@@ -190,7 +225,7 @@ def calculate_scores(model, test_loader, device, num_classes, ignore_index=20):
     return test_loss, test_iou, test_f1
 
 
-def inference(img, model):
+def inference(img, model, input_size=None):
     """
     Perform inference on a single image.
     """
@@ -200,9 +235,17 @@ def inference(img, model):
     img = img.to(device)
     model = model.to(device)
     model.eval()
+
+    if input_size is not None:
+        _, _, h, w = img.shape
+        img = F.pad(img, (0, input_size[1] - w, 0, input_size[0] - h), mode="constant", value=0)
+
     with torch.no_grad():
         output = model(img)
-        pred = output.argmax(dim=1)
+        if input_size is not None:
+            pred = output.argmax(dim=1)[:, :h, :w]
+        else:
+            pred = output.argmax(dim=1)
     return pred
 
 
@@ -216,3 +259,43 @@ def pad_image(img_tensor, target_height, target_width):
     padding = (0, pad_w, 0, pad_h)  # (left, right, top, bottom)
     padded_img = F.pad(img_tensor, padding, mode="constant", value=0)
     return padded_img
+
+
+def _save_training_checkpoint(model, optimizer, scheduler, epoch, best_val_loss, patience_counter, current_val_loss, path):
+    torch.save({
+        "epoch": epoch,
+        "model_state_dict": model.state_dict(),
+        "optimizer_state_dict": optimizer.state_dict(),
+        "scheduler_state_dict": scheduler.state_dict(),
+        "best_val_loss": best_val_loss,
+        "patience_counter": patience_counter,
+        "current_val_loss": current_val_loss,
+    }, path)
+
+
+def load_training_checkpoint(path, model, optimizer=None, scheduler=None):
+    """
+    Load a full training checkpoint including optimizer and scheduler state.
+    
+    Args:
+        path (str): Path to the checkpoint file.
+        model (torch.nn.Module): The model to load weights into.
+        optimizer (torch.optim.Optimizer, optional): If provided, loads optimizer state.
+        scheduler (torch.optim.lr_scheduler._LRScheduler, optional): If provided, loads scheduler state.
+    
+    Returns:
+        dict: Dictionary with keys 'epoch', 'best_val_loss', 'patience_counter', 'current_val_loss'.
+              Also loads model (and optionally optimizer/scheduler) in-place.
+    """
+    checkpoint = torch.load(path, weights_only=True)
+    model.load_state_dict(checkpoint["model_state_dict"], strict=False)
+    if optimizer is not None and "optimizer_state_dict" in checkpoint:
+        optimizer.load_state_dict(checkpoint["optimizer_state_dict"])
+    if scheduler is not None and "scheduler_state_dict" in checkpoint:
+        scheduler.load_state_dict(checkpoint["scheduler_state_dict"])
+    return {
+        "epoch": checkpoint["epoch"],
+        "best_val_loss": checkpoint["best_val_loss"],
+        "patience_counter": checkpoint["patience_counter"],
+        "current_val_loss": checkpoint["current_val_loss"],
+    }
