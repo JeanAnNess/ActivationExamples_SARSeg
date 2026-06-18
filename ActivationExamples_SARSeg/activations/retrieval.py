@@ -74,7 +74,7 @@ def plot_similarities(query_image, query_predicted, similar_images, similar_mask
 
 def find_n_similar_regions(query_activation, layer_name, train_image_keys, activation_lmdb_path,
                            n=5, region_coords=None, metric="cosine", scale_factors=None, arch_name="unet",
-                           dtype=torch.float32):
+                           dtype=torch.float32, candidate_regions=None):
     """
     Find the top-N most similar regions in training images compared to a fixed region in the query image.
     
@@ -109,22 +109,27 @@ def find_n_similar_regions(query_activation, layer_name, train_image_keys, activ
                                                     scale_factors=scale_factors)
 
     query_tensor_flat = query_tensor.flatten(start_dim=1)
-
     win_w, win_h = query_tensor.shape[-2:]
-    acti_w, acti_h = query_activation.shape[-2:]
-
-    divisions_w = int(np.ceil(acti_w / win_w))
-    divisions_h = int(np.ceil(acti_h / win_h))
 
     factor = scale_factors[layer_name]
 
-    if divisions_w == 0 or divisions_h == 0:
-        print("Error: Query activation map is not square.")
-        print(f"Activation Map Dimensions: {acti_w}x{acti_h}, Window Dimensions: {win_w}x{win_h}")
-        print(f"temp_query shape: {query_tensor.shape}")
-        print(f"query shape: {query_activation.shape}")
-        print(f"region_coords: {region_coords}")
-        return []
+    if candidate_regions is not None:
+        candidate_list = candidate_regions
+    else:
+        acti_w, acti_h = query_activation.shape[-2:]
+
+        divisions_w = int(np.ceil(acti_w / win_w))
+        divisions_h = int(np.ceil(acti_h / win_h))
+
+        if divisions_w == 0 or divisions_h == 0:
+            print("Error: Query activation map is not square.")
+            print(f"Activation Map Dimensions: {acti_w}x{acti_h}, Window Dimensions: {win_w}x{win_h}")
+            print(f"temp_query shape: {query_tensor.shape}")
+            print(f"query shape: {query_activation.shape}")
+            print(f"region_coords: {region_coords}")
+            return []
+
+        candidate_list = None
 
     with env.begin() as txn:
         for train_image_key in train_image_keys:
@@ -135,28 +140,34 @@ def find_n_similar_regions(query_activation, layer_name, train_image_keys, activ
             train_tensor = train_activation.to(device)
             _, _, H, W = train_tensor.shape
 
-            x_positions = list(range(0, W, win_w))
-            if divisions_w * win_w > W:
-                # print("Warning: Activation map is smaller than query window.")
-                x_positions[-1] = W - win_w
-            
-            y_positions = list(range(0, H, win_h))
-            if divisions_h * win_h > H:
-                # print("Warning: Activation map is smaller than query window.")
-                y_positions[-1] = H - win_h
+            if candidate_list is not None:
+                candidates = candidate_list
+            else:
+                x_positions = list(range(0, W, win_w))
+                if divisions_w * win_w > W:
+                    x_positions[-1] = W - win_w
+                y_positions = list(range(0, H, win_h))
+                if divisions_h * win_h > H:
+                    y_positions[-1] = H - win_h
+                candidates = [(x*factor, y*factor, (x+win_w)*factor, (y+win_h)*factor)
+                              for y in y_positions for x in x_positions]
 
-            # Slide a window over the activation map
-            for y in y_positions:
-                for x in x_positions:
-                    candidate_activation = train_tensor[:, :, y:y+win_h, x:x+win_w]
-                    candidate_activation_flat = candidate_activation.flatten(start_dim=1)
-                    similarity = compute_similarity(query_tensor_flat, candidate_activation_flat, metric=metric)
+            for (cx1, cy1, cx2, cy2) in candidates:
+                # Extract at same spatial size as query, clamped to feature map bounds
+                scx = int(np.round(cx1 / factor))
+                scy = int(np.round(cy1 / factor))
+                if scx + win_w > W:
+                    scx = W - win_w
+                if scy + win_h > H:
+                    scy = H - win_h
+                candidate_activation = train_tensor[:, :, scy:scy+win_h, scx:scx+win_w]
+                candidate_activation_flat = candidate_activation.flatten(start_dim=1)
+                similarity = compute_similarity(query_tensor_flat, candidate_activation_flat, metric=metric)
 
-                    # Store top-N matches
-                    region = (x*factor, y*factor, (x+win_w)*factor, (y+win_h)*factor)
-                    heapq.heappush(min_heap, (similarity, train_image_key, region))
-                    if len(min_heap) > n:
-                        heapq.heappop(min_heap)
+                region = (cx1, cy1, cx2, cy2)
+                heapq.heappush(min_heap, (similarity, train_image_key, region))
+                if len(min_heap) > n:
+                    heapq.heappop(min_heap)
 
     env.close()
     return sorted(min_heap, key=lambda x: x[0], reverse=True)  # Sort by highest similarity
@@ -166,7 +177,7 @@ def find_n_similar_images(query_image, layer_names, image_keys,
                           activations_lmdb_path, images_lmdb_path, model,
                           img_hw=(120, 120), color_map=None, region_coords=None, n=5,
                           plotting=True, scale_factors=None, layer_shapes=None, arch_name="unet",
-                          dtype=torch.float32):
+                          dtype=torch.float32, candidate_regions=None):
     """
     Displays the query image alongside the most similar image regions.
 
@@ -217,7 +228,8 @@ def find_n_similar_images(query_image, layer_names, image_keys,
                                              n=50, region_coords=region_coords,
                                              scale_factors=scale_factors,
                                              arch_name=arch_name,
-                                             dtype=dtype)
+                                             dtype=dtype,
+                                             candidate_regions=candidate_regions)
                      for layer_name, qa in zip(layer_names, query_activations)]
 
     if not plotting:
