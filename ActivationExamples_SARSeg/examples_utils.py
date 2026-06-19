@@ -1,6 +1,5 @@
 """
-Shim file — re-exports everything from the refactored submodules.
-All existing notebooks continue to work with `from ... examples_utils import *`.
+re-exports everything
 """
 
 from ActivationExamples_SARSeg.config import *
