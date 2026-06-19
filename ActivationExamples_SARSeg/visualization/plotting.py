@@ -233,16 +233,13 @@ def plot_query_examples(
             (df_top_matches["original_region"] == tuple(region)) &
             (df_top_matches["layer"] == layer_name)
         ]
+        # print(f"Layer: {layer_name}, Matches found: {filtered}")
         matches_raw = ast.literal_eval(str(filtered["top_n"].values[0]))
         matches = matches_raw[:top_x] if isinstance(matches_raw, list) else []
 
         for proto_col_offset, match in enumerate(matches):
             match_score, match_ref, match_region_raw = match
-            match_region = (
-                tuple(map(int, match_region_raw))
-                if not isinstance(match_region_raw, tuple)
-                else match_region_raw
-            )
+            match_region = tuple(map(int, match_region_raw))
             px1, py1, px2, py2 = match_region
 
             prototype_ref = get_reference_ref(match_ref, parquet_path)
@@ -351,12 +348,12 @@ def plot_query_examples(
         loc="upper center",
         bbox_to_anchor=(0.6, last_row_y0),
         ncol=3,
-        fontsize=12,
+        fontsize=16,
         frameon=False,
     )
 
     grid.update(wspace=0.1, hspace=0.25)
-    plt.tight_layout()
+    # plt.tight_layout()
     plt.show()
 
     if filename:

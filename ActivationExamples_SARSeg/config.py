@@ -81,7 +81,7 @@ pixel_value_to_class_name = {
     231: "Pastures",
     241: "Permanent crops",
     242: "Complex cultivation patterns",
-    243: "Land principally occupied by agriculture, with significant areas of natural vegetation",
+    243: "Land principally occupied by agriculture, \nwith significant areas of natural vegetation",
     244: "Agro-forestry areas",
     311: "Broad-leaved forest",
     312: "Coniferous forest",

@@ -32,36 +32,75 @@ pip install --extra-index-url https://download.pytorch.org/whl/cu118 -e .
 
 ```
 ActivationExamples_SARSeg/
-└── ActivationExamples_SARSeg 
-│   ├── __init__.py            
-│   └── examples_utils  
-│  
-├── data                            <- Will have to be created and populated by you
-│   └── BigEarthNet
-│       ├── Encoded-BigEarthNet     <- LMDB created via rico-hdl
-│       ├── examples_subsample              <- generated in `generating_examples` 
-│       ├── Reference_Maps
-│       └── metadata.parquet
 │
-├── models             
+├── ActivationExamples_SARSeg/
+│   ├── __init__.py                     
+│   ├── config.py                       # Constants, color maps, class mappings, layer shapes
+│   ├── examples_utils.py               # re-exports
+│   │
+│   ├── activations/
+│   │   ├── hooks.py                    # Hook registration, activation extraction (U-Net & DeepLabV3+)
+│   │   ├── storage.py                  # Store activations in LMDB database
+│   │   └── retrieval.py                # Cosine/euclidean similarity search, top-N retrieval
+│   │
+│   ├── data/
+│   │   ├── lmdb.py                     # LMDB key matching, image/mask loading
+│   │   └── dataset.py                  # PyTorch Dataset
+│   │
+│   ├── models/
+│   │   ├── unet.py                     # CustomUnetSkipConn, factories, pretrained loading
+│   │   ├── deeplabv3plus.py            # DeepLabV3+ factories, pretrained loading
+│   │   └── registry.py                 # layer shapes/scale factors per architecture
+│   │
+│   ├── training/
+│   │   └── trainer.py                  # Training loop, evaluation, inference, checkpointing
+│   │
+│   ├── analysis/
+│   │   └── overlap.py                  # Pairwise/aggregate overlap analysis, IoU-based matching
+│   │
+│   └── visualization/
+│       └── plotting.py                 # Grid visualizations, overlap heatmaps
 │
-├── notebooks
-│   ├── training_SkipConn           <- Training the U-Net
-│   ├── generating_examples
-│   ├── find_top_n                  <- Precalculate Example Retrieval
-│   ├── top_matches_skipp_conn.csv  <- Precalculated as CSV
-│   ├── qualitative_analysis
-│   ├── quantitative_analysis
-│   ├── plots                       <- Stores the plots from experiments
-│   ├── noisy_results.csv           <- Results for `Continuity` Experiment
-│   └── runtime 
-│      
-├── LICENSE
+├── data/BigEarthNet/                   # Will have to be created and populated by you
+│   ├── Encoded-BigEarthNet/            # LMDB created via rico-hdl
+│   ├── examples_subsample/             # Generated activation examples (U-Net)
+│   ├── examples_subsample_deeplabv3p/  # Generated activation examples (DeepLabV3+)
+│   ├── Reference_Maps/
+│   └── metadata.parquet
 │
-├── README.md 
-│                        
-└── pyproject.toml                        
+├── models/
+│
+├── notebooks/
+│   ├── training_SkipConn.ipynb               # U-Net training
+│   ├── training_DeepLabV3Plus.ipynb          # DeepLabV3+ training
+│   ├── generating_examples.ipynb             # Activation extraction (U-Net)
+│   ├── generating_examples_deeplab.ipynb     # Activation extraction (DeepLabV3+)
+│   ├── find_top_n.ipynb                      # Precompute top-N similarity (U-Net)
+│   ├── find_top_n_deeplab.ipynb              # Precompute top-N similarity (DeepLabV3+)
+│   ├── quantitative_analysis.ipynb           # Correctness/faithfulness metrics
+│   ├── qualitative_analysis.ipynb            # Visualizations (U-Net)
+│   ├── qualitative_analysis_deeplab.ipynb    # Visualizations (DeepLabV3+)
+│   └── runtime.ipynb                         # Runtime profiling
+│
+├── README.md
+├── pyproject.toml
+└── LICENSE
 ```
+
+## Pipeline
+Training, activation extraction and precomputing similarities exists for two architectures: U-Net (default) and DeepLabV3+ (indicated with suffix `_deeplab`).
+
+1. **Training**: `notebooks/training_SkipConn.ipynb` or `training_DeepLabV3Plus.ipynb`
+2. **Activation Extraction**: `generating_examples.ipynb` stores intermediate activations into LMDB
+3. **Precompute Similarities**: `find_top_n.ipynb` computes top-N matching regions via sliding window cosine similarity
+4. **Quantitative Analysis**: `quantitative_analysis.ipynb`: correctness, continuity, overlap metrics for U-Net
+5. **Qualitative Analysis**: `qualitative_analysis.ipynb`: visual inspection of retrieved examples
+
+### Outputs
+- `notebooks/plots/`: generated figures (overlap matrices, qualitative grids)
+- `notebooks/top_matches_skipp_conn.csv`: precomputed matches for U-Net
+- `notebooks/top_matches_deeplabv3p.csv`: precomputed matches for DeepLabV3+
+- `data/BigEarthNet/examples_subsample*/`: LMDB databases of stored activations
 
 ## References
 
@@ -87,5 +126,4 @@ To use the **reBEN dataset** for training or evaluation, follow these steps to d
 
 #### Step 2: Convert to LMDB format using `rico-hdl`
 - Install `rico-hdl` by following the instructions at [rico-hdl GitHub repository](https://github.com/kai-tub/rico-hdl).
-
-- Store the required files according to the [Project Structure](#project-structure) section. described above
+- Store the required files according to the [Project Structure](#project-structure) section.
