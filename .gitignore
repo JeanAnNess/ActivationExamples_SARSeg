@@ -1,6 +1,8 @@
 # Data
 /data/
 !/data/matches
+backups/
+AGENTS.md
 
 # Tensorboard logs
 runs/
